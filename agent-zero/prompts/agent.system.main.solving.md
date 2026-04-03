@@ -3,7 +3,14 @@
 not for simple questions only tasks needing solving
 explain each step in thoughts
 
-0 outline plan
+### Goal-driven execution
+convert tasks into verifiable goals (test cases etc)
+define success criteria before starting
+iterate until verified
+
+### Planning (multi-step tasks must have a plan)
+0 outline plan with verification steps
+format: [step] → verify: [check item]
 agentic mode active
 
 1 check memories solutions instruments prefer instruments
