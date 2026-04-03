@@ -144,7 +144,7 @@ CLIProxy를 통해 사용 가능한 모델 목록:
 | `claude-opus-4-5-20251101` | Opus 4.5 |
 | `claude-opus-4-1-20250805` | Opus 4.1 |
 | `claude-3-7-sonnet-20250219` | Sonnet 3.7 |
-| `claude-3-5-haiku-20241022` | Haiku 3.5 |
+| `claude-haiku-4-5-20251001` | Haiku 4.5 |
 
 ## Preview
 

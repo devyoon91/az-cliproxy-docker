@@ -306,7 +306,7 @@ curl http://localhost:8317/v1/models
 | `claude-opus-4-1-20250805` | Opus 4.1 |
 | `claude-sonnet-4-20250514` | Sonnet 4 |
 | `claude-3-7-sonnet-20250219` | Sonnet 3.7 |
-| `claude-3-5-haiku-20241022` | Haiku 3.5 |
+| `claude-haiku-4-5-20251001` | Haiku 4.5 |
 
 ---
 
