@@ -5,23 +5,22 @@ Agent Zero AI 에이전트를 Claude Code(CLIProxy) 기반으로 구동하는 Do
 ## Architecture
 
 ```
-┌─────────────────────┐     ┌──────────────────────┐
-│   Agent Zero (UI)   │────▶│  CLIProxy (API)      │
-│   localhost:50001   │     │  localhost:8317       │
-│                     │     │                      │
-│  - LiteLLM          │     │  Claude Code CLI     │
-│  - OpenAI compat    │     │  → OpenAI compat API │
-└─────────────────────┘     └──────────┬───────────┘
-                                       │ OAuth
-                                       ▼
-                              ┌─────────────────┐
-                              │  Claude AI      │
-                              │  (Pro/Max 구독)  │
-                              └─────────────────┘
+┌──────────────┐     ┌─────────────────────┐     ┌──────────────────────┐
+│  Telegram    │     │   Agent Zero (UI)   │────▶│  CLIProxy (API)      │
+│  (Android)   │     │   localhost:50001   │     │  localhost:8317       │
+└──────┬───────┘     └──────────▲──────────┘     └──────────┬───────────┘
+       │                        │                           │ OAuth
+       ▼                        │                           ▼
+┌──────────────┐                │                  ┌─────────────────┐
+│  Telegram    │────────────────┘                  │  Claude AI      │
+│  Bridge Bot  │  (양방향 메시지 전달)                │  (Pro/Max 구독)  │
+│  :8443       │                                   └─────────────────┘
+└──────────────┘
 ```
 
 - **Agent Zero**: AI 에이전트 프레임워크 (LiteLLM 기반, 20+ LLM 지원)
 - **CLIProxy**: Claude Code CLI를 OpenAI 호환 API로 노출하는 프록시
+- **Telegram Bridge**: 폰에서 Agent Zero 양방향 제어 (알림 + 지시)
 
 ## Quick Start
 
@@ -51,6 +50,7 @@ curl http://localhost:8317/v1/models
 | CLIProxy | 8317 | OpenAI-compatible API |
 | CLIProxy | 8085 | Management UI |
 | CLIProxy | 54545 | OAuth callback |
+| Telegram Bridge | 8443 | 알림 Webhook (내부용) |
 
 ## Project Structure
 
@@ -63,8 +63,12 @@ curl http://localhost:8317/v1/models
 │   ├── config.yaml             # CLIProxy 설정
 │   ├── auth/                   # OAuth 토큰 저장 (자동생성)
 │   └── logs/                   # 로그
+├── telegram-bridge/
+│   ├── Dockerfile              # Telegram Bot 이미지 빌드
+│   └── bot.py                  # 양방향 브릿지 봇
 └── agent-zero/
     ├── git-init.sh             # Git 인증 자동 설정 스크립트
+    ├── settings.json           # Agent Zero 설정 (영속화)
     ├── prompts/                # 시스템 프롬프트 (커스텀 가능)
     ├── work_dir/               # 에이전트 작업 디렉토리 (clone, 코드 생성)
     ├── memory/                 # 대화 히스토리
@@ -79,6 +83,28 @@ curl http://localhost:8317/v1/models
 | Chat model name | `claude-sonnet-4-6` |
 | Chat model API base URL | `http://cliproxy:8317/v1` |
 | API Key | `sk-placeholder` |
+
+## Telegram Bot (Android Remote Control)
+
+폰에서 Agent Zero를 원격 제어할 수 있습니다. 포트포워딩/VPN 불필요.
+
+```
+폰 → Telegram 클라우드 → Bridge Bot(Docker) → Agent Zero
+폰 ← Telegram 클라우드 ← Bridge Bot(Docker) ← Agent Zero
+```
+
+1. `.env`에 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` 설정
+2. `docker compose up -d --build telegram-bridge`
+3. Telegram에서 봇에게 메시지 전송 → Agent Zero가 응답
+
+| 명령어 | 설명 |
+|--------|------|
+| `/start` | 봇 시작 |
+| `/status` | Agent Zero 상태 확인 |
+| `/new` | 새 대화 시작 |
+| 일반 메시지 | Agent Zero에 지시 전달 |
+
+자세한 내용은 [GUIDE.md](GUIDE.md#14-telegram-bot-원격-제어) 참조.
 
 ## Git Push Automation
 

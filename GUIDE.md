@@ -18,7 +18,9 @@
 10. [Agent Zero UI 모델 설정](#10-agent-zero-ui-모델-설정)
 11. [Git Push 자동화](#11-git-push-자동화)
 12. [프롬프트 커스터마이징](#12-프롬프트-커스터마이징)
-13. [트러블슈팅](#13-트러블슈팅)
+13. [설정 영속화](#13-설정-영속화)
+14. [Telegram Bot 원격 제어](#14-telegram-bot-원격-제어)
+15. [트러블슈팅](#15-트러블슈팅)
 
 ---
 
@@ -439,7 +441,99 @@ docker compose up -d agent-zero --force-recreate
 
 ---
 
-## 13. 트러블슈팅
+## 13. 설정 영속화
+
+Agent Zero UI에서 변경한 설정은 컨테이너 내부 `/a0/tmp/settings.json`에 저장됩니다. 컨테이너 재시작 시 설정이 초기화되는 것을 방지하기 위해 호스트에 마운트합니다.
+
+### 설정 추출 (최초 1회)
+
+UI에서 설정 변경 후 Save → 컨테이너에서 추출:
+```bash
+docker exec agent-zero cat /a0/tmp/settings.json > ./agent-zero/settings.json
+```
+
+### docker-compose 볼륨 마운트
+
+```yaml
+volumes:
+  - ./agent-zero/settings.json:/a0/tmp/settings.json
+```
+
+이후 UI에서 설정을 변경하면 호스트의 `settings.json`에도 자동 반영됩니다.
+
+---
+
+## 14. Telegram Bot 원격 제어
+
+Android 폰에서 Telegram을 통해 Agent Zero를 원격으로 제어할 수 있습니다. 포트포워딩이나 VPN 없이 동작합니다.
+
+### 동작 원리
+
+```
+폰 → Telegram 클라우드 서버 → Bridge Bot (Docker, polling) → Agent Zero
+폰 ← Telegram 클라우드 서버 ← Bridge Bot (Docker)          ← Agent Zero
+```
+
+- Bridge Bot이 Telegram 서버에 주기적으로 polling하여 새 메시지를 가져옴
+- 폰과 PC가 직접 통신하지 않음 — Telegram 클라우드가 중계
+- 인터넷만 연결되어 있으면 어디서든 제어 가능
+
+### Telegram Bot 생성
+
+1. Telegram 앱 설치 (Android Play Store)
+2. 검색창에 `@BotFather` 검색 → 대화 시작
+3. `/newbot` 입력 → 봇 이름, username 설정
+4. **Bot Token** 수령 (형식: `123456789:ABCdefGHI...`)
+5. 생성된 봇에게 아무 메시지 전송 (채팅방 활성화)
+6. 브라우저에서 `https://api.telegram.org/bot{TOKEN}/getUpdates` 열기
+7. 응답에서 `chat.id` 값 확인 → **Chat ID**
+
+### 환경변수 설정
+
+`.env`에 추가:
+```env
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+TELEGRAM_CHAT_ID=123456789
+```
+
+### 실행
+
+```bash
+docker compose up -d --build telegram-bridge
+```
+
+### 사용법
+
+| Telegram 명령 | 설명 |
+|---------------|------|
+| `/start` | 봇 시작 안내 |
+| `/status` | Agent Zero 상태 확인 (연결, CSRF 토큰, 컨텍스트) |
+| `/new` | 새 대화 시작 (컨텍스트 초기화) |
+| `/help` | 도움말 |
+| 일반 메시지 | Agent Zero에 지시 전달 → 응답 수신 |
+
+### 알림 Webhook
+
+Agent Zero 작업 중 알림을 Telegram으로 보내려면:
+```bash
+curl -X POST http://telegram-bridge:8443/notify \
+     -H 'Content-Type: application/json' \
+     -d '{"text": "작업 완료!"}'
+```
+
+Agent Zero에게 지시할 때 활용:
+> "작업 완료되면 curl로 http://telegram-bridge:8443/notify 에 결과를 알려줘"
+
+### 기술 세부사항
+
+- Agent Zero API: `/message_async`로 메시지 전송, `/poll`로 응답 수집
+- CSRF 보호: `/csrf_token`에서 토큰 획득 후 `X-CSRF-Token` 헤더에 포함
+- 세션 유지: aiohttp CookieJar로 쿠키 유지, 403 시 자동 재발급
+- 보안: `TELEGRAM_CHAT_ID`로 본인만 봇 사용 가능 (다른 사용자 차단)
+
+---
+
+## 15. 트러블슈팅
 
 ### CLIProxy `mkdir: no such file or directory`
 
@@ -483,6 +577,27 @@ OPENAI_API_KEY=sk-placeholder
 **원인**: `localhost` 사용
 
 **해결**: Docker 내부 DNS인 `http://cliproxy:8317/v1` 사용. Agent Zero 컨테이너에서 `localhost`는 자기 자신을 가리킴
+
+### Telegram Bot `CSRF token missing or invalid` (403)
+
+**원인**: Agent Zero의 CSRF 보호 — 모든 POST 요청에 토큰 필요
+
+**해결**: Bridge Bot이 자동으로 `/csrf_token`에서 토큰을 획득하고 헤더에 포함합니다. 403이 지속되면:
+```bash
+docker compose restart telegram-bridge
+```
+
+### Telegram Bot `getUpdates` 결과가 비어있음
+
+**원인**: 봇에게 메시지를 아직 보내지 않음
+
+**해결**: Telegram 앱에서 생성한 봇을 검색 → 아무 메시지 전송 → getUpdates 재호출
+
+### Agent Zero 설정이 재시작 시 초기화됨
+
+**원인**: `tmp/settings.json`이 볼륨 마운트되지 않음
+
+**해결**: [13. 설정 영속화](#13-설정-영속화) 참조
 
 ---
 

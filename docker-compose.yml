@@ -50,6 +50,23 @@ services:
     networks:
       - az-net
 
+  # ── Telegram Bridge: 양방향 알림 + 지시 ──
+  telegram-bridge:
+    build: ./telegram-bridge
+    container_name: telegram-bridge
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - AZ_API_URL=http://agent-zero:80
+    ports:
+      - "8443:8443"   # 알림 webhook (내부용)
+    depends_on:
+      agent-zero:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - az-net
+
 networks:
   az-net:
     driver: bridge
