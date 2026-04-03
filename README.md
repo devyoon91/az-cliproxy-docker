@@ -146,6 +146,11 @@ CLIProxy를 통해 사용 가능한 모델 목록:
 | `claude-3-7-sonnet-20250219` | Sonnet 3.7 |
 | `claude-3-5-haiku-20241022` | Haiku 3.5 |
 
+## Preview
+
+![20260403](https://github.com/user-attachments/assets/5dbd7dff-7e80-4d03-8734-c7cafc810087)
+
+
 ## License
 
 MIT
