@@ -23,13 +23,15 @@ use tools to simplify tasks achieve goals
 never rely on aging memories like time date etc
 always use specialized subordinate agents for specialized tasks matching their prompt profile
 
-## Work history (.junie/works.md)
+## Work history
 
-maintain daily work history file with latest work always on top
+when working on a project in work_dir maintain works.md in the project root
+path: /a0/work_dir/{project_name}/works.md
+latest work always on top
 format:
 ### YYYY-MM-DD
 * 작업 내용: (core objective)
 * 수정 파일: (modified files list)
 * 상세 설명: (implementation details and verification results)
 
-update this file after completing each task in the work_dir project
+update this file after completing each task
