@@ -1,0 +1,27 @@
+# CLIProxy Configuration
+# 상세 문서: https://help.router-for.me/configuration/basic
+
+host: "0.0.0.0"
+port: 8317
+
+# 핵심: auth 디렉토리 명시 (이 값이 없으면 mkdir 오류 발생)
+auth-dir: "/root/.cli-proxy-api"
+
+# Logging
+debug: false
+logging-to-file: false
+
+# Request retry
+request-retry: 3
+
+# Management API
+remote-management:
+  allow-remote: false
+  secret-key: ""
+
+# Provider 설정 (OAuth 로그인 후 자동 저장됨)
+auth: {}
+
+# Claude Code Provider
+# 최초 실행 시 OAuth 로그인 필요:
+#   docker exec -it cliproxy cliproxyapi --claude-login

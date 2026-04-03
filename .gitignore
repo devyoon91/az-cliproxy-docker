@@ -1,0 +1,14 @@
+# OAuth tokens (sensitive)
+cliproxy/auth/
+
+# Logs
+cliproxy/logs/
+agent-zero/logs/
+
+# Agent Zero runtime data
+agent-zero/work_dir/
+agent-zero/memory/
+
+# Python cache
+__pycache__/
+*.pyc

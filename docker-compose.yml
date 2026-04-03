@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  # ── CLIProxy: Claude Code CLI → OpenAI-compatible API ──
+  cliproxy:
+    image: eceasy/cli-proxy-api:latest
+    container_name: cliproxy
+    ports:
+      - "8317:8317"   # OpenAI-compatible API
+      - "8085:8085"   # Web Management UI
+      - "54545:54545" # OAuth callback
+    volumes:
+      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml
+      - ./cliproxy/auth:/root/.cli-proxy-api
+      - ./cliproxy/logs:/CLIProxyAPI/logs
+    restart: unless-stopped
+    networks:
+      - az-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8317/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Agent Zero: AI Agent Framework ──
+  agent-zero:
+    image: frdel/agent-zero:latest
+    container_name: agent-zero
+    ports:
+      - "50001:80"
+    env_file:
+      - .env
+    volumes:
+      - ./agent-zero/work_dir:/a0/work_dir
+      - ./agent-zero/memory:/a0/memory
+      - ./agent-zero/logs:/a0/logs
+      - ./agent-zero/prompts:/a0/prompts
+    depends_on:
+      cliproxy:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - az-net
+
+networks:
+  az-net:
+    driver: bridge
