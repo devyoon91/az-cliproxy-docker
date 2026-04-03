@@ -26,16 +26,20 @@ Agent Zero AI 에이전트를 Claude Code(CLIProxy) 기반으로 구동하는 Do
 ## Quick Start
 
 ```bash
-# 1. 컨테이너 시작
+# 1. 환경변수 설정
+cp .env.example .env
+# .env 파일에 GITHUB_TOKEN 등 입력
+
+# 2. 컨테이너 시작
 docker compose up -d
 
-# 2. Claude OAuth 로그인
+# 3. Claude OAuth 로그인
 docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -claude-login
 
-# 3. API 확인
+# 4. API 확인
 curl http://localhost:8317/v1/models
 
-# 4. Agent Zero 접속
+# 5. Agent Zero 접속
 # http://localhost:50001
 ```
 
@@ -53,14 +57,16 @@ curl http://localhost:8317/v1/models
 ```
 .
 ├── docker-compose.yml          # Docker Compose 정의
-├── .env                        # Agent Zero 환경변수
+├── .env                        # 환경변수 (토큰 포함, git 제외)
+├── .env.example                # 환경변수 템플릿
 ├── cliproxy/
 │   ├── config.yaml             # CLIProxy 설정
 │   ├── auth/                   # OAuth 토큰 저장 (자동생성)
 │   └── logs/                   # 로그
 └── agent-zero/
+    ├── git-init.sh             # Git 인증 자동 설정 스크립트
     ├── prompts/                # 시스템 프롬프트 (커스텀 가능)
-    ├── work_dir/               # 에이전트 생성 파일
+    ├── work_dir/               # 에이전트 작업 디렉토리 (clone, 코드 생성)
     ├── memory/                 # 대화 히스토리
     └── logs/                   # 로그
 ```
@@ -73,6 +79,16 @@ curl http://localhost:8317/v1/models
 | Chat model name | `claude-sonnet-4-6` |
 | Chat model API base URL | `http://cliproxy:8317/v1` |
 | API Key | `sk-placeholder` |
+
+## Git Push Automation
+
+Agent Zero 컨테이너에서 Git clone/commit/push가 자동으로 됩니다.
+
+1. `.env`에 `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GITHUB_TOKEN` 설정
+2. 컨테이너 시작 시 `git-init.sh`가 자동 실행되어 Git 인증 완료
+3. Agent Zero에게 "저장소 클론 받아서 작업하고 push해줘" 지시
+
+자세한 내용은 [GUIDE.md](GUIDE.md#11-git-push-자동화) 참조.
 
 ## Customizing Prompts
 

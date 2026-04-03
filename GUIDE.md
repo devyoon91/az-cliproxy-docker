@@ -16,8 +16,9 @@
 8. [Claude OAuth 로그인](#8-claude-oauth-로그인)
 9. [API 동작 확인](#9-api-동작-확인)
 10. [Agent Zero UI 모델 설정](#10-agent-zero-ui-모델-설정)
-11. [프롬프트 커스터마이징](#11-프롬프트-커스터마이징)
-12. [트러블슈팅](#12-트러블슈팅)
+11. [Git Push 자동화](#11-git-push-자동화)
+12. [프롬프트 커스터마이징](#12-프롬프트-커스터마이징)
+13. [트러블슈팅](#13-트러블슈팅)
 
 ---
 
@@ -45,6 +46,7 @@
 - Docker Desktop 설치 및 실행
 - Claude Pro 또는 Max 구독 계정
 - 브라우저 (OAuth 인증용)
+- GitHub Personal Access Token (PAT) — Git push 자동화 시 필요
 
 ---
 
@@ -63,14 +65,16 @@ mkdir -p agent-zero_cliproxy/agent-zero/logs
 ```
 agent-zero_cliproxy/
 ├── docker-compose.yml
-├── .env
+├── .env                  # 실제 토큰 포함 (git에서 제외됨)
+├── .env.example          # 토큰 없는 템플릿 (git에 포함)
 ├── cliproxy/
 │   ├── config.yaml
 │   ├── auth/
 │   └── logs/
 └── agent-zero/
-    ├── prompts/          # (Step 11에서 추가)
-    ├── work_dir/
+    ├── git-init.sh       # 컨테이너 시작 시 Git 인증 자동 설정
+    ├── prompts/          # (Step 12에서 추가)
+    ├── work_dir/         # Agent Zero 작업 디렉토리 (clone, 코드 생성 등)
     ├── memory/
     └── logs/
 ```
@@ -115,11 +119,17 @@ services:
       - "50001:80"
     env_file:
       - .env
+    environment:
+      - GIT_USER_NAME=${GIT_USER_NAME}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
       - ./agent-zero/work_dir:/a0/work_dir
       - ./agent-zero/memory:/a0/memory
       - ./agent-zero/logs:/a0/logs
       - ./agent-zero/prompts:/a0/prompts
+      - ./agent-zero/git-init.sh:/a0/git-init.sh:ro
+    entrypoint: ["/bin/sh", "-c", "sh /a0/git-init.sh && exec /exe/initialize.sh"]
     depends_on:
       cliproxy:
         condition: service_started
@@ -187,7 +197,14 @@ CHAT_API_KEY=sk-placeholder
 UTILITY_MODEL_DEFAULT=claude-sonnet-4-6
 UTILITY_MODEL_BASE_URL=http://cliproxy:8317/v1
 UTILITY_API_KEY=sk-placeholder
+
+# Git Configuration (Agent Zero 컨테이너 내 git push 자동화)
+GIT_USER_NAME=your-github-username
+GIT_USER_EMAIL=your-email@example.com
+GITHUB_TOKEN=ghp_your_personal_access_token
 ```
+
+> **보안 주의**: `.env` 파일에는 GitHub PAT 토큰이 포함되므로 `.gitignore`에 의해 저장소에서 제외됩니다. `.env.example`을 참고하여 `.env` 파일을 생성하세요.
 
 ### 환경변수 설명
 
@@ -197,6 +214,9 @@ UTILITY_API_KEY=sk-placeholder
 | `CHAT_MODEL_DEFAULT` | 메인 채팅 모델명 |
 | `CHAT_MODEL_BASE_URL` | CLIProxy API 엔드포인트 (Docker 내부 주소) |
 | `UTILITY_MODEL_DEFAULT` | 유틸리티(요약, 압축 등) 모델명 |
+| `GIT_USER_NAME` | GitHub 사용자명 |
+| `GIT_USER_EMAIL` | Git 커밋용 이메일 |
+| `GITHUB_TOKEN` | GitHub Personal Access Token (repo 권한 필요) |
 
 ---
 
@@ -309,7 +329,60 @@ curl http://localhost:8317/v1/models
 
 ---
 
-## 11. 프롬프트 커스터마이징
+## 11. Git Push 자동화
+
+Agent Zero 컨테이너 안에서 Git clone/commit/push를 자동으로 수행할 수 있도록 설정합니다.
+
+### 동작 원리
+
+1. 컨테이너 시작 시 `git-init.sh` 스크립트가 실행됨
+2. `.env`의 `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GITHUB_TOKEN`으로 Git 인증 설정
+3. Agent Zero가 `work_dir/` 안에서 clone → 작업 → commit → push 수행
+
+### git-init.sh
+
+`agent-zero/git-init.sh` 파일이 컨테이너 시작 시 자동 실행됩니다:
+
+```bash
+#!/bin/sh
+git config --global user.name "${GIT_USER_NAME}"
+git config --global user.email "${GIT_USER_EMAIL}"
+git config --global credential.helper store
+echo "https://${GIT_USER_NAME}:${GITHUB_TOKEN}@github.com" > /root/.git-credentials
+```
+
+### GitHub PAT 생성 방법
+
+1. GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. "Generate new token (classic)" 클릭
+3. 권한 선택: `repo` (Full control of private repositories)
+4. 토큰 생성 후 `.env`의 `GITHUB_TOKEN`에 입력
+
+### 사용 예시
+
+Agent Zero UI에서 다음과 같이 지시:
+
+> "https://github.com/username/my-project 를 clone 받아서 README.md를 수정하고 commit 후 push 해줘"
+
+Agent Zero가 컨테이너 내부에서:
+```bash
+cd /a0/work_dir
+git clone https://github.com/username/my-project
+cd my-project
+# 작업 수행...
+git add . && git commit -m "Update README" && git push
+```
+
+### 보안 주의사항
+
+- `.env` 파일에 PAT 토큰이 포함되므로 **절대 저장소에 올리지 마세요**
+- `.gitignore`에 `.env`가 등록되어 있어 자동으로 제외됨
+- `.env.example`을 참고하여 `.env` 파일을 생성하세요
+- 컨테이너 내부의 `/root/.git-credentials`에 토큰이 저장됨 (컨테이너 재시작 시 재생성)
+
+---
+
+## 12. 프롬프트 커스터마이징
 
 ### 기본 프롬프트 추출
 
@@ -366,7 +439,7 @@ docker compose up -d agent-zero --force-recreate
 
 ---
 
-## 12. 트러블슈팅
+## 13. 트러블슈팅
 
 ### CLIProxy `mkdir: no such file or directory`
 
