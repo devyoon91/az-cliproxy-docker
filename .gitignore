@@ -1,5 +1,6 @@
 # Secrets
 .env
+cliproxy/config.yaml
 
 # OAuth tokens (sensitive)
 cliproxy/auth/
