@@ -13,7 +13,7 @@
     "chat_model_rl_input": 0,
     "chat_model_rl_output": 0,
     "util_model_provider": "other",
-    "util_model_name": "claude-3-5-haiku-20241022",
+    "util_model_name": "claude-haiku-4-5-20251001",
     "util_model_api_base": "http://cliproxy:8317/v1",
     "util_model_ctx_length": 100000,
     "util_model_ctx_input": 0.7,
