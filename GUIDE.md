@@ -20,7 +20,8 @@
 12. [프롬프트 커스터마이징](#12-프롬프트-커스터마이징)
 13. [설정 영속화](#13-설정-영속화)
 14. [Telegram Bot 원격 제어](#14-telegram-bot-원격-제어)
-15. [트러블슈팅](#15-트러블슈팅)
+15. [팁: 호스트 파일시스템 접근](#15-팁-호스트-파일시스템-접근)
+16. [트러블슈팅](#16-트러블슈팅)
 
 ---
 
@@ -533,7 +534,27 @@ Agent Zero에게 지시할 때 활용:
 
 ---
 
-## 15. 트러블슈팅
+## 15. 팁: 호스트 파일시스템 접근
+
+기본적으로 Agent Zero는 Docker 컨테이너 안에서 격리되어 `work_dir/`만 접근 가능합니다. 호스트 PC의 프로젝트 폴더에 직접 접근하고 싶다면 `docker-compose.yml`에 볼륨을 추가하세요.
+
+```yaml
+# agent-zero 서비스의 volumes에 추가
+volumes:
+  - C:/Users/myname/projects:/a0/work_dir/host-projects   # Windows
+  - /home/myname/projects:/a0/work_dir/host-projects       # Linux/Mac
+```
+
+Agent Zero에서 `/a0/work_dir/host-projects/`로 접근하면 호스트의 실제 프로젝트 파일을 읽고 수정할 수 있습니다.
+
+> **주의**: 호스트 파일시스템을 마운트하면 Agent Zero가 해당 경로의 파일을 삭제/수정할 수 있습니다. 중요한 디렉토리는 읽기 전용(`:ro`)으로 마운트하는 것을 권장합니다.
+> ```yaml
+> - C:/Users/myname/documents:/a0/work_dir/docs:ro   # 읽기 전용
+> ```
+
+---
+
+## 16. 트러블슈팅
 
 ### CLIProxy `mkdir: no such file or directory`
 
