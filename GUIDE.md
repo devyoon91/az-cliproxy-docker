@@ -593,6 +593,23 @@ docker compose restart telegram-bridge
 
 **해결**: Telegram 앱에서 생성한 봇을 검색 → 아무 메시지 전송 → getUpdates 재호출
 
+### Telegram Bot `Cannot connect to host agent-zero:80`
+
+**원인**: Agent Zero 컨테이너가 아직 시작되지 않았거나, telegram-bridge가 먼저 기동됨
+
+**해결**:
+```bash
+# 1. Agent Zero 상태 확인
+docker ps
+docker logs agent-zero --tail 5
+
+# 2. Agent Zero가 정상이면 telegram-bridge만 재시작
+docker compose restart telegram-bridge
+
+# 3. Agent Zero가 안 떠있으면 전체 시작
+docker compose up -d
+```
+
 ### Agent Zero 설정이 재시작 시 초기화됨
 
 **원인**: `tmp/settings.json`이 볼륨 마운트되지 않음
