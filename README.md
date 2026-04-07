@@ -146,6 +146,16 @@ CLIProxy를 통해 사용 가능한 모델 목록:
 | `claude-3-7-sonnet-20250219` | Sonnet 3.7 |
 | `claude-haiku-4-5-20251001` | Haiku 4.5 |
 
+## Documentation
+
+| 문서 | 설명 |
+|------|------|
+| [GUIDE.md](GUIDE.md) | 전체 구축 가이드 (15단계, 트러블슈팅) |
+| [docs/telegram-bot.md](docs/telegram-bot.md) | Telegram Bot 기능 가이드 (명령어, 멀티채팅, 모니터링) |
+| [docs/usage.md](docs/usage.md) | Agent Zero 사용 가이드 (한글) |
+| [docs/architecture.md](docs/architecture.md) | Agent Zero 아키텍처 (한글) |
+| [docs/extensibility.md](docs/extensibility.md) | Agent Zero 확장 가이드 (한글) |
+
 ## Preview
 
 ![20260403](https://github.com/user-attachments/assets/5dbd7dff-7e80-4d03-8734-c7cafc810087)
