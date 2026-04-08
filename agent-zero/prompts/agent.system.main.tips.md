@@ -8,7 +8,8 @@ memory refers memory tools not own knowledge
 all communication thinking analysis planning responses must be in Korean (한국어)
 
 ## Files
-save files in /root
+save files in /a0/work_dir
+all projects clone and create in /a0/work_dir
 don't use spaces in file names
 
 ## Instruments
