@@ -374,6 +374,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /chats → 채팅 목록\n"
         "• /switch [번호] → 채팅 전환\n"
         "• /new → 새 대화 시작\n"
+        "• /logs → 전체 로그 파일 전송\n"
         "• /monitor_on → 모니터링 켜기\n"
         "• /monitor_off → 모니터링 끄기\n"
         "• /follow_on → 자동 추적 켜기\n"
@@ -461,12 +462,90 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("새 대화를 시작합니다.")
 
 
+async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """현재 채팅의 전체 로그를 파일로 전송"""
+    if update.effective_chat.id != CHAT_ID:
+        return
+
+    if not monitor_context:
+        await update.message.reply_text("추적 중인 채팅이 없습니다. /chats 로 확인하세요.")
+        return
+
+    await update.message.reply_text("📄 로그 파일 생성 중...")
+
+    try:
+        session = await get_az_session()
+        headers = get_headers()
+
+        # chat export API로 전체 대화 JSON 가져오기
+        async with session.post(
+            f"{AZ_API_URL}/chat_export",
+            json={"ctxid": monitor_context},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                await update.message.reply_text(f"로그 조회 실패: {resp.status}")
+                return
+            data = await resp.json()
+
+        content = data.get("content", {})
+        import json
+        import io
+
+        # JSON 파일로 전송
+        json_str = json.dumps(content, ensure_ascii=False, indent=2)
+        json_file = io.BytesIO(json_str.encode("utf-8"))
+        json_file.name = f"chat_log_{monitor_context[:8]}.json"
+
+        await tg_bot.send_document(
+            chat_id=CHAT_ID,
+            document=json_file,
+            caption=f"📋 채팅 로그 (Context: {monitor_context[:12]}...)",
+        )
+
+        # 텍스트 요약도 함께 생성
+        txt_lines = []
+        if isinstance(content, list):
+            messages = content
+        elif isinstance(content, dict):
+            messages = content.get("messages", content.get("history", []))
+        else:
+            messages = []
+
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            text = msg.get("content", "")
+            if isinstance(text, list):
+                text = " ".join(
+                    item.get("text", "") for item in text if isinstance(item, dict)
+                )
+            if text:
+                preview = text[:200] + "..." if len(text) > 200 else text
+                txt_lines.append(f"[{role}] {preview}")
+
+        if txt_lines:
+            txt_str = "\n\n".join(txt_lines)
+            txt_file = io.BytesIO(txt_str.encode("utf-8"))
+            txt_file.name = f"chat_log_{monitor_context[:8]}.txt"
+            await tg_bot.send_document(
+                chat_id=CHAT_ID,
+                document=txt_file,
+                caption="📝 텍스트 요약 버전",
+            )
+
+    except Exception as e:
+        await update.message.reply_text(f"로그 조회 실패: {str(e)}")
+
+
 async def cmd_monitor_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global monitor_enabled
+    global monitor_enabled, monitor_log_version
     if update.effective_chat.id != CHAT_ID:
         return
     monitor_enabled = True
-    await update.message.reply_text("✅ 웹 채팅 모니터링이 켜졌습니다.")
+    # 현재 시점부터 모니터링 (이전 히스토리 전송 방지)
+    monitor_log_version = await sync_log_version(monitor_context)
+    await update.message.reply_text("✅ 웹 채팅 모니터링이 켜졌습니다. (현재 시점부터)")
 
 
 async def cmd_monitor_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -502,9 +581,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /new → 새 대화 시작\n"
         "  /chats → 채팅 목록 조회\n"
         "  /switch [번호] → 채팅 전환\n"
+        "  /logs → 전체 로그 파일 전송\n"
         "  일반 메시지 → Agent Zero에 지시\n\n"
         "모니터링:\n"
-        "  /monitor_on → 웹 채팅 알림 켜기\n"
+        "  /monitor_on → 웹 채팅 알림 켜기 (현재 시점부터)\n"
         "  /monitor_off → 웹 채팅 알림 끄기\n"
         "  /follow_on → 채팅 자동 추적 켜기\n"
         "  /follow_off → 채팅 자동 추적 끄기\n\n"
@@ -564,6 +644,7 @@ def main():
     app.add_handler(CommandHandler("chats", cmd_chats))
     app.add_handler(CommandHandler("switch", cmd_switch))
     app.add_handler(CommandHandler("new", cmd_new))
+    app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
     app.add_handler(CommandHandler("follow_on", cmd_follow_on))
