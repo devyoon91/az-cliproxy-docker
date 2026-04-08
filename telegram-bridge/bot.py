@@ -375,6 +375,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /switch [번호] → 채팅 전환\n"
         "• /new → 새 대화 시작\n"
         "• /logs → 전체 로그 파일 전송\n"
+        "• /docs → 문서 목록/열람\n"
         "• /monitor_on → 모니터링 켜기\n"
         "• /monitor_off → 모니터링 끄기\n"
         "• /follow_on → 자동 추적 켜기\n"
@@ -538,6 +539,84 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"로그 조회 실패: {str(e)}")
 
 
+async def cmd_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """문서 목록 조회 및 파일 전송"""
+    import os
+    import io
+
+    if update.effective_chat.id != CHAT_ID:
+        return
+
+    # 문서 파일 목록
+    doc_files = {}
+    for f in ["GUIDE.md", "README.md"]:
+        path = f"/app/{f}"
+        if os.path.exists(path):
+            doc_files[f] = path
+
+    docs_dir = "/app/docs"
+    if os.path.isdir(docs_dir):
+        for f in sorted(os.listdir(docs_dir)):
+            if f.endswith(".md"):
+                doc_files[f"docs/{f}"] = os.path.join(docs_dir, f)
+
+    if not doc_files:
+        await update.message.reply_text("문서를 찾을 수 없습니다.")
+        return
+
+    args = context.args
+    if not args:
+        # 목록 표시
+        lines = ["📚 문서 목록:\n"]
+        for i, name in enumerate(doc_files.keys(), 1):
+            lines.append(f"  {i}. {name}")
+        lines.append(f"\n문서 보기: /docs [번호]")
+        lines.append("전체 다운로드: /docs all")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if args[0].lower() == "all":
+        # 전체 파일 전송
+        for name, path in doc_files.items():
+            with open(path, "rb") as f:
+                await tg_bot.send_document(
+                    chat_id=CHAT_ID,
+                    document=f,
+                    filename=name.replace("/", "_"),
+                    caption=f"📄 {name}",
+                )
+        return
+
+    try:
+        idx = int(args[0]) - 1
+        keys = list(doc_files.keys())
+        if idx < 0 or idx >= len(keys):
+            await update.message.reply_text(f"1~{len(keys)} 범위에서 선택하세요.")
+            return
+
+        name = keys[idx]
+        path = doc_files[name]
+
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # 텔레그램 메시지로 보내기 (4000자 이하면 텍스트, 초과면 파일)
+        if len(content) <= 4000:
+            await update.message.reply_text(f"📄 **{name}**\n\n{content}")
+        else:
+            # 파일로 전송
+            doc_file = io.BytesIO(content.encode("utf-8"))
+            doc_file.name = name.replace("/", "_")
+            await tg_bot.send_document(
+                chat_id=CHAT_ID,
+                document=doc_file,
+                caption=f"📄 {name} ({len(content)} 글자)",
+            )
+
+    except ValueError:
+        await update.message.reply_text("숫자 또는 'all'을 입력하세요. 예: /docs 1")
+
+
 async def cmd_monitor_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global monitor_enabled, monitor_log_version
     if update.effective_chat.id != CHAT_ID:
@@ -582,6 +661,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /chats → 채팅 목록 조회\n"
         "  /switch [번호] → 채팅 전환\n"
         "  /logs → 전체 로그 파일 전송\n"
+        "  /docs → 문서 목록 조회\n"
+        "  /docs [번호] → 문서 열람\n"
+        "  /docs all → 전체 문서 다운로드\n"
         "  일반 메시지 → Agent Zero에 지시\n\n"
         "모니터링:\n"
         "  /monitor_on → 웹 채팅 알림 켜기 (현재 시점부터)\n"
@@ -645,6 +727,7 @@ def main():
     app.add_handler(CommandHandler("switch", cmd_switch))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("logs", cmd_logs))
+    app.add_handler(CommandHandler("docs", cmd_docs))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
     app.add_handler(CommandHandler("follow_on", cmd_follow_on))

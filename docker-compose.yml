@@ -58,6 +58,10 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - AZ_API_URL=http://agent-zero:80
+    volumes:
+      - ./docs:/app/docs:ro
+      - ./GUIDE.md:/app/GUIDE.md:ro
+      - ./README.md:/app/README.md:ro
     ports:
       - "8443:8443"   # 알림 webhook (내부용)
     depends_on:
