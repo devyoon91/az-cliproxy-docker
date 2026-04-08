@@ -155,6 +155,7 @@ CLIProxy를 통해 사용 가능한 모델 목록:
 | [docs/usage.md](docs/usage.md) | Agent Zero 사용 가이드 (한글) |
 | [docs/architecture.md](docs/architecture.md) | Agent Zero 아키텍처 (한글) |
 | [docs/extensibility.md](docs/extensibility.md) | Agent Zero 확장 가이드 (한글) |
+| [docs/scheduler.md](docs/scheduler.md) | Agent Zero 스케줄러 가이드 (한글) |
 
 ## Preview
 
