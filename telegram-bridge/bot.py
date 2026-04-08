@@ -136,6 +136,31 @@ async def fetch_chat_list() -> list:
         return []
 
 
+# ── 현재 시점 log_version 가져오기 (히스토리 스킵용) ──
+async def sync_log_version(ctx: str) -> int:
+    """특정 컨텍스트의 현재 log_version만 조용히 가져옴 (알림 없이 스킵)"""
+    try:
+        session = await get_az_session()
+        headers = get_headers()
+        poll_payload = {
+            "log_from": 999999999,  # 큰 수 → 로그 0건 반환, version만 획득
+            "context": ctx or None,
+            "timezone": "Asia/Seoul",
+        }
+        async with session.post(
+            f"{AZ_API_URL}/poll",
+            json=poll_payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data.get("log_version", 0)
+    except Exception as e:
+        logger.error(f"sync_log_version error: {e}")
+    return 0
+
+
 # ── Agent Zero 웹 채팅 모니터 ──
 async def monitor_agent_zero():
     """Agent Zero의 모든 대화를 백그라운드로 모니터링하여 Telegram에 전달"""
@@ -144,6 +169,10 @@ async def monitor_agent_zero():
 
     logger.info("Agent Zero monitor started")
     await asyncio.sleep(10)
+
+    # 최초 시작 시 현재 시점으로 스킵 (기존 히스토리 전송 방지)
+    monitor_log_version = await sync_log_version(monitor_context)
+    logger.info(f"Monitor synced to log_version: {monitor_log_version}")
 
     while True:
         if not monitor_enabled:
@@ -191,15 +220,16 @@ async def monitor_agent_zero():
                 new_ctx = new_context[:8]
                 await send_telegram(f"🔄 채팅 전환 감지: {old_ctx}... → {new_ctx}...")
                 monitor_context = new_context
-                monitor_log_version = 0
                 monitor_log_guid = new_log_guid
+                # 현재 시점으로 스킵 (이전 히스토리 전송 방지)
+                monitor_log_version = await sync_log_version(new_context)
                 await asyncio.sleep(2)
                 continue
 
             # 대화가 리셋된 경우
             if new_log_guid and new_log_guid != monitor_log_guid:
                 monitor_log_guid = new_log_guid
-                monitor_log_version = 0
+                monitor_log_version = new_log_version  # 현재 시점 유지
                 await asyncio.sleep(2)
                 continue
 
@@ -413,8 +443,9 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     az_context = target_id
     monitor_context = target_id
-    monitor_log_version = 0
     monitor_log_guid = ""
+    # 현재 시점으로 스킵 (이전 히스토리 전송 방지)
+    monitor_log_version = await sync_log_version(target_id)
 
     await update.message.reply_text(f"✅ 채팅 전환: {target_name}\nID: {target_id[:12]}...")
 
