@@ -106,15 +106,15 @@ curl http://localhost:8317/v1/models
 
 자세한 내용은 [GUIDE.md](GUIDE.md#14-telegram-bot-원격-제어) 참조.
 
-## Git Push Automation
+## Git + GitHub CLI Automation
 
-Agent Zero 컨테이너에서 Git clone/commit/push가 자동으로 됩니다.
+Agent Zero 컨테이너에서 Git clone/commit/push + PR 생성/이슈 관리가 자동으로 됩니다.
 
 1. `.env`에 `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GITHUB_TOKEN` 설정
-2. 컨테이너 시작 시 `git-init.sh`가 자동 실행되어 Git 인증 완료
-3. Agent Zero에게 "저장소 클론 받아서 작업하고 push해줘" 지시
+2. 컨테이너 시작 시 `git-init.sh`가 Git 인증 + GitHub CLI 설치/인증 완료
+3. Agent Zero에게 "브랜치 만들어서 작업하고 PR 올려줘" 지시
 
-자세한 내용은 [GUIDE.md](GUIDE.md#11-git-push-자동화) 참조.
+자세한 내용은 [GUIDE.md](GUIDE.md#11-git--github-cli-자동화) 참조.
 
 ## Customizing Prompts
 
