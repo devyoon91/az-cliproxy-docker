@@ -1,6 +1,6 @@
 # Agent Zero + CLIProxy Docker Setup
 
-Agent Zero AI 에이전트를 Claude Code(CLIProxy) 기반으로 구동하는 Docker Compose 환경입니다.
+Agent Zero AI 에이전트를 CLIProxy 기반으로 다양한 LLM과 연동하여 구동하는 Docker Compose 환경입니다.
 
 ## Architecture
 
@@ -12,15 +12,15 @@ Agent Zero AI 에이전트를 Claude Code(CLIProxy) 기반으로 구동하는 Do
        │                        │                           │ OAuth
        ▼                        │                           ▼
 ┌──────────────┐                │                  ┌─────────────────┐
-│  Telegram    │────────────────┘                  │  Claude AI      │
-│  Bridge Bot  │  (양방향 메시지 전달)                │  (Pro/Max 구독)  │
+│  Telegram    │────────────────┘                  │  LLM Provider   │
+│  Bridge Bot  │  (양방향 메시지 전달)                │  (OpenAI, etc)  │
 │  :8443       │                                   └─────────────────┘
 └──────────────┘
 ```
 
 - **Agent Zero**: AI 에이전트 프레임워크 (LiteLLM 기반, 20+ LLM 지원)
-- **CLIProxy**: Claude Code CLI를 OpenAI 호환 API로 노출하는 프록시
-- **Telegram Bridge**: 폰에서 Agent Zero 양방향 제어 (알림 + 지시)
+- **CLIProxy**: 다양한 LLM CLI를 OpenAI 호환 API로 노출하는 프록시
+- **Telegram Bridge**: 폰에서 Agent Zero 양방향 제어 (알림 + 지시 + 사용량 추적)
 
 ## Quick Start
 
@@ -32,8 +32,8 @@ cp .env.example .env
 # 2. 컨테이너 시작
 docker compose up -d
 
-# 3. Claude OAuth 로그인
-docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -claude-login
+# 3. LLM Provider OAuth 로그인 (예: OpenAI Codex)
+docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -codex-login
 
 # 4. API 확인
 curl http://localhost:8317/v1/models
@@ -80,7 +80,7 @@ curl http://localhost:8317/v1/models
 | Setting | Value |
 |---------|-------|
 | Chat model provider | `Other OpenAI compatible` |
-| Chat model name | `claude-sonnet-4-6` |
+| Chat model name | 사용할 모델명 (예: `gpt-4.1`, `o3`) |
 | Chat model API base URL | `http://cliproxy:8317/v1` |
 | API Key | `sk-placeholder` |
 
@@ -134,17 +134,14 @@ docker compose up -d agent-zero --force-recreate
 
 ## Available Models
 
-CLIProxy를 통해 사용 가능한 모델 목록:
+CLIProxy 또는 직접 API를 통해 사용 가능한 모델 (연결된 프로바이더에 따라 다름):
 
-| Model | Description |
-|-------|-------------|
-| `claude-opus-4-6` | 최신 Opus |
-| `claude-sonnet-4-6` | 최신 Sonnet |
-| `claude-sonnet-4-5-20250929` | Sonnet 4.5 |
-| `claude-opus-4-5-20251101` | Opus 4.5 |
-| `claude-opus-4-1-20250805` | Opus 4.1 |
-| `claude-3-7-sonnet-20250219` | Sonnet 3.7 |
-| `claude-haiku-4-5-20251001` | Haiku 4.5 |
+```bash
+# 사용 가능한 모델 확인
+curl http://localhost:8317/v1/models
+```
+
+Agent Zero는 LiteLLM 기반으로 OpenAI, Anthropic, Google 등 20+ 프로바이더를 지원합니다.
 
 ## Documentation
 

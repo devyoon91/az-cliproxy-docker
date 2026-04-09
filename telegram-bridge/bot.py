@@ -4,11 +4,16 @@ Telegram ↔ Agent Zero Bridge Bot
 - Telegram 메시지를 Agent Zero에 전달 (양방향 지시)
 - Agent Zero 웹 채팅 모니터링 → Telegram 실시간 알림
 - 멀티채팅 지원: 채팅 목록 조회, 전환, 자동 추적
+- 토큰 사용량 추적 및 일일 리포트
 """
 
 import os
 import asyncio
 import logging
+import json
+import io
+from datetime import datetime, timedelta
+from collections import defaultdict
 import aiohttp
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -44,6 +49,66 @@ tg_bot: Bot | None = None
 
 # 채팅 목록 캐시
 cached_contexts: list = []
+
+# ── 토큰 사용량 추적 ──
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+usage_today: dict = {
+    "date": datetime.now().strftime("%Y-%m-%d"),
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "requests": 0,
+    "cost_usd": 0.0,
+}
+usage_history: list = []  # 최근 7일
+
+# 모델별 비용 (USD per 1M tokens) - 필요시 업데이트
+MODEL_COSTS = {
+    # OpenAI
+    "o3": {"input": 2.0, "output": 8.0},
+    "gpt-4.1": {"input": 2.0, "output": 8.0},
+    "gpt-4.1-mini": {"input": 0.4, "output": 1.6},
+    "gpt-4.1-nano": {"input": 0.1, "output": 0.4},
+    "gpt-4o": {"input": 2.5, "output": 10.0},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.6},
+    # Anthropic (API 직접 사용 시)
+    "claude-opus-4-6": {"input": 15.0, "output": 75.0},
+    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+    "claude-haiku-4-5-20251001": {"input": 0.8, "output": 4.0},
+    # 기본값 (알 수 없는 모델)
+    "_default": {"input": 2.0, "output": 8.0},
+}
+
+
+def calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """모델별 토큰 비용 계산"""
+    costs = MODEL_COSTS.get(model, MODEL_COSTS["_default"])
+    return (input_tokens * costs["input"] + output_tokens * costs["output"]) / 1_000_000
+
+
+def track_usage(model: str, input_tokens: int, output_tokens: int):
+    """사용량 누적"""
+    global usage_today
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 날짜가 바뀌면 리셋
+    if usage_today["date"] != today:
+        if usage_today["requests"] > 0:
+            usage_history.append(usage_today.copy())
+            # 최근 7일만 유지
+            while len(usage_history) > 7:
+                usage_history.pop(0)
+        usage_today = {
+            "date": today,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "requests": 0,
+            "cost_usd": 0.0,
+        }
+
+    usage_today["input_tokens"] += input_tokens
+    usage_today["output_tokens"] += output_tokens
+    usage_today["requests"] += 1
+    usage_today["cost_usd"] += calc_cost(model, input_tokens, output_tokens)
 
 
 async def get_az_session() -> aiohttp.ClientSession:
@@ -376,6 +441,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /new → 새 대화 시작\n"
         "• /logs → 전체 로그 파일 전송\n"
         "• /docs → 문서 목록/열람\n"
+        "• /usage → 토큰 사용량/비용 조회\n"
         "• /monitor_on → 모니터링 켜기\n"
         "• /monitor_off → 모니터링 끄기\n"
         "• /follow_on → 자동 추적 켜기\n"
@@ -617,6 +683,32 @@ async def cmd_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("숫자 또는 'all'을 입력하세요. 예: /docs 1")
 
 
+async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """토큰 사용량 조회"""
+    if update.effective_chat.id != CHAT_ID:
+        return
+
+    today = usage_today
+    lines = [
+        f"📊 토큰 사용량 ({today['date']})\n",
+        f"요청 수: {today['requests']}",
+        f"입력 토큰: {today['input_tokens']:,}",
+        f"출력 토큰: {today['output_tokens']:,}",
+        f"예상 비용: ${today['cost_usd']:.4f}",
+    ]
+
+    if usage_history:
+        lines.append("\n📈 최근 기록:")
+        total_cost = 0.0
+        for day in reversed(usage_history[-7:]):
+            lines.append(f"  {day['date']}: {day['requests']}건, ${day['cost_usd']:.4f}")
+            total_cost += day["cost_usd"]
+        total_cost += today["cost_usd"]
+        lines.append(f"\n💰 총 누적: ${total_cost:.4f}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_monitor_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global monitor_enabled, monitor_log_version
     if update.effective_chat.id != CHAT_ID:
@@ -670,8 +762,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /monitor_off → 웹 채팅 알림 끄기\n"
         "  /follow_on → 채팅 자동 추적 켜기\n"
         "  /follow_off → 채팅 자동 추적 끄기\n\n"
-        "상태:\n"
+        "상태/비용:\n"
         "  /status → Agent Zero 상태 확인\n"
+        "  /usage → 토큰 사용량 및 비용 조회\n"
         "  /help → 도움말"
     )
 
@@ -688,7 +781,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 
-# ── Notification webhook ──
+# ── Notification & Usage webhook ──
 async def webhook_handler(request):
     """HTTP POST로 알림 수신 → Telegram 전달"""
     try:
@@ -700,14 +793,69 @@ async def webhook_handler(request):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+async def usage_track_handler(request):
+    """HTTP POST로 토큰 사용량 기록
+    Usage: curl -X POST http://telegram-bridge:8443/track \
+           -H 'Content-Type: application/json' \
+           -d '{"model": "gpt-4.1", "input_tokens": 1500, "output_tokens": 500}'
+    """
+    try:
+        data = await request.json()
+        model = data.get("model", "unknown")
+        input_tokens = int(data.get("input_tokens", 0))
+        output_tokens = int(data.get("output_tokens", 0))
+        track_usage(model, input_tokens, output_tokens)
+        return web.json_response({
+            "ok": True,
+            "today": usage_today,
+        })
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def usage_get_handler(request):
+    """GET 현재 사용량 조회"""
+    return web.json_response({
+        "today": usage_today,
+        "history": usage_history[-7:],
+    })
+
+
 async def run_webhook_server():
     app = web.Application()
     app.router.add_post("/notify", webhook_handler)
+    app.router.add_post("/track", usage_track_handler)
+    app.router.add_get("/usage", usage_get_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8443)
     await site.start()
-    logger.info("Notification webhook server started on :8443")
+    logger.info("Webhook server started on :8443 (/notify, /track, /usage)")
+
+
+# ── 일일 사용량 리포트 스케줄러 ──
+async def daily_usage_reporter():
+    """매일 자정에 일일 사용량 리포트를 Telegram으로 전송"""
+    await asyncio.sleep(30)  # 초기 대기
+    logger.info("Daily usage reporter started")
+
+    while True:
+        now = datetime.now()
+        # 다음 자정까지 대기
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=1, second=0, microsecond=0)
+        wait_seconds = (tomorrow - now).total_seconds()
+        await asyncio.sleep(wait_seconds)
+
+        # 어제 사용량 리포트
+        if usage_today["requests"] > 0:
+            report = (
+                f"📊 일일 사용량 리포트 ({usage_today['date']})\n\n"
+                f"요청 수: {usage_today['requests']}건\n"
+                f"입력 토큰: {usage_today['input_tokens']:,}\n"
+                f"출력 토큰: {usage_today['output_tokens']:,}\n"
+                f"예상 비용: ${usage_today['cost_usd']:.4f}"
+            )
+            await send_telegram(report)
 
 
 # ── Post-init: 모니터 시작 ──
@@ -715,7 +863,8 @@ async def post_init(application: Application):
     global tg_bot
     tg_bot = application.bot
     asyncio.create_task(monitor_agent_zero())
-    logger.info("Monitor task created")
+    asyncio.create_task(daily_usage_reporter())
+    logger.info("Monitor + daily reporter tasks created")
 
 
 def main():
@@ -728,6 +877,7 @@ def main():
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("docs", cmd_docs))
+    app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
     app.add_handler(CommandHandler("follow_on", cmd_follow_on))
