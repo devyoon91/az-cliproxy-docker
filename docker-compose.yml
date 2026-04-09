@@ -25,7 +25,7 @@ services:
 
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
-    image: frdel/agent-zero:latest
+    image: agent0ai/agent-zero:latest
     container_name: agent-zero
     ports:
       - "50001:80"
