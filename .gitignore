@@ -1,6 +1,7 @@
 # Secrets
 .env
 cliproxy/config.yaml
+agent-zero/settings.json
 
 # OAuth tokens (sensitive)
 cliproxy/auth/
