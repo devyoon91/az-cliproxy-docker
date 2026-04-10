@@ -10,6 +10,4 @@
 
 {{ include "./agent.system.main.coding.md" }}
 
-{{ include "./agent.system.main.security.md" }}
-
 {{ include "./agent.system.main.tips.md" }}
