@@ -468,6 +468,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /logs → 전체 로그 파일 전송\n"
         "• /docs → 문서 목록/열람\n"
         "• /usage → 토큰 사용량/비용 조회\n"
+        "• /backup → 설정 백업 파일 전송\n"
         "• /monitor_on → 모니터링 켜기\n"
         "• /monitor_off → 모니터링 끄기\n"
         "• /follow_on → 자동 추적 켜기\n"
@@ -711,6 +712,100 @@ async def cmd_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("숫자 또는 'all'을 입력하세요. 예: /docs 1")
 
 
+async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """설정 경량 백업 → Telegram 파일 전송"""
+    import zipfile
+    import io as _io
+
+    if update.effective_chat.id != CHAT_ID:
+        return
+
+    await update.message.reply_text("📦 백업 생성 중...")
+
+    # 백업 대상 (경량: 설정 + 프롬프트 + 프로필)
+    backup_targets = {
+        # 호스트 마운트된 파일들 (telegram-bridge 컨테이너에서 접근 가능한 것)
+        "GUIDE.md": "/app/GUIDE.md",
+        "README.md": "/app/README.md",
+    }
+
+    # docs 디렉토리
+    docs_dir = "/app/docs"
+
+    # Agent Zero 설정은 API로 가져오기
+    settings_data = None
+    try:
+        session = await get_az_session()
+        headers = get_headers()
+        async with session.post(
+            f"{AZ_API_URL}/settings_get",
+            json={},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status == 200:
+                settings_data = await resp.json()
+    except Exception:
+        pass
+
+    try:
+        # ZIP 생성
+        zip_buffer = _io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            # 문서 파일
+            for name, path in backup_targets.items():
+                if os.path.exists(path):
+                    zf.write(path, name)
+
+            # docs 디렉토리
+            if os.path.isdir(docs_dir):
+                for f in os.listdir(docs_dir):
+                    fpath = os.path.join(docs_dir, f)
+                    if os.path.isfile(fpath):
+                        zf.write(fpath, f"docs/{f}")
+
+            # settings.json (API에서 가져온 것)
+            if settings_data:
+                zf.writestr(
+                    "agent-zero/settings.json",
+                    json.dumps(settings_data, ensure_ascii=False, indent=2),
+                )
+
+            # 사용량 데이터
+            usage_data = {
+                "today": usage_today,
+                "history": usage_history,
+            }
+            zf.writestr(
+                "usage_data.json",
+                json.dumps(usage_data, ensure_ascii=False, indent=2),
+            )
+
+            # 백업 메타데이터
+            meta = {
+                "timestamp": datetime.now().isoformat(),
+                "type": "telegram-light-backup",
+                "monitor_context": monitor_context,
+            }
+            zf.writestr(
+                "backup_meta.json",
+                json.dumps(meta, ensure_ascii=False, indent=2),
+            )
+
+        zip_buffer.seek(0)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        await tg_bot.send_document(
+            chat_id=CHAT_ID,
+            document=zip_buffer,
+            filename=f"az_backup_{ts}.zip",
+            caption=f"📦 경량 백업 완료 ({ts})\n설정 + 문서 + 사용량 데이터",
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"백업 실패: {str(e)}")
+
+
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """토큰 사용량 조회"""
     if update.effective_chat.id != CHAT_ID:
@@ -793,6 +888,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "상태/비용:\n"
         "  /status → Agent Zero 상태 확인\n"
         "  /usage → 토큰 사용량 및 비용 조회\n"
+        "  /backup → 설정 경량 백업 (ZIP 파일 전송)\n"
         "  /help → 도움말"
     )
 
@@ -906,6 +1002,7 @@ def main():
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("docs", cmd_docs))
     app.add_handler(CommandHandler("usage", cmd_usage))
+    app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
     app.add_handler(CommandHandler("follow_on", cmd_follow_on))
