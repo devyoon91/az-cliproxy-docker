@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
 AZ_API_URL = os.environ.get("AZ_API_URL", "http://agent-zero:80")
+AZ_API_PREFIX = os.environ.get("AZ_API_PREFIX", "/api")  # v1.8+: /api prefix
 
 # Agent Zero context ID (세션 유지)
 az_context = ""
@@ -123,7 +124,7 @@ async def get_az_session() -> aiohttp.ClientSession:
 
     try:
         async with az_session.get(
-            f"{AZ_API_URL}/csrf_token",
+            f"{AZ_API_URL}{AZ_API_PREFIX}/csrf_token",
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status == 200:
@@ -183,7 +184,7 @@ async def fetch_chat_list() -> list:
         }
 
         async with session.post(
-            f"{AZ_API_URL}/poll",
+            f"{AZ_API_URL}{AZ_API_PREFIX}/poll",
             json=poll_payload,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=15),
@@ -213,7 +214,7 @@ async def sync_log_version(ctx: str) -> int:
             "timezone": "Asia/Seoul",
         }
         async with session.post(
-            f"{AZ_API_URL}/poll",
+            f"{AZ_API_URL}{AZ_API_PREFIX}/poll",
             json=poll_payload,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10),
@@ -255,7 +256,7 @@ async def monitor_agent_zero():
             }
 
             async with session.post(
-                f"{AZ_API_URL}/poll",
+                f"{AZ_API_URL}{AZ_API_PREFIX}/poll",
                 json=poll_payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30),
@@ -367,7 +368,7 @@ async def send_to_agent_zero(message: str) -> str:
         session = await get_az_session()
 
         async with session.post(
-            f"{AZ_API_URL}/message_async",
+            f"{AZ_API_URL}{AZ_API_PREFIX}/message_async",
             json=payload,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=30),
@@ -377,7 +378,7 @@ async def send_to_agent_zero(message: str) -> str:
                 session = await get_az_session()
                 headers = get_headers()
                 async with session.post(
-                    f"{AZ_API_URL}/message_async",
+                    f"{AZ_API_URL}{AZ_API_PREFIX}/message_async",
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=30),
@@ -425,7 +426,7 @@ async def check_agent_zero_status() -> str:
         util_model = "알 수 없음"
         try:
             async with session.post(
-                f"{AZ_API_URL}/settings_get",
+                f"{AZ_API_URL}{AZ_API_PREFIX}/settings_get",
                 json={},
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=10),
@@ -575,7 +576,7 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # chat export API로 전체 대화 JSON 가져오기
         async with session.post(
-            f"{AZ_API_URL}/chat_export",
+            f"{AZ_API_URL}{AZ_API_PREFIX}/chat_export",
             json={"ctxid": monitor_context},
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=30),
@@ -738,7 +739,7 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session = await get_az_session()
         headers = get_headers()
         async with session.post(
-            f"{AZ_API_URL}/settings_get",
+            f"{AZ_API_URL}{AZ_API_PREFIX}/settings_get",
             json={},
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10),
