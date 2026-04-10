@@ -115,7 +115,7 @@ plugin-name/
 
 ```python
 # 파일: /agents/{profile}/extensions/agent_init/my_extension.py
-from python.helpers.extension import Extension
+from helpers.extension import Extension
 
 class MyExtension(Extension):
     async def execute(self, **kwargs):
@@ -133,7 +133,7 @@ class MyExtension(Extension):
 
 ```python
 # 파일: /agents/{profile}/tools/my_tool.py
-from python.helpers.tool import Tool
+from helpers.tool import Tool
 
 class MyTool(Tool):
     async def execute(self, **kwargs):

@@ -32,7 +32,7 @@
 
 ### 구성 요소
 
-- **Agent Zero** (`frdel/agent-zero`): 자율 AI 에이전트 프레임워크. LiteLLM을 통해 다양한 LLM 프로바이더를 지원하며, OpenAI 호환 API 엔드포인트에 연결할 수 있습니다.
+- **Agent Zero** (`agent0ai/agent-zero`): 자율 AI 에이전트 프레임워크. LiteLLM을 통해 다양한 LLM 프로바이더를 지원하며, OpenAI 호환 API 엔드포인트에 연결할 수 있습니다.
 - **CLIProxy** (`eceasy/cli-proxy-api`): 다양한 AI CLI 도구의 OAuth 인증을 활용하여 OpenAI 호환 REST API로 노출하는 프록시.
 
 ### 동작 흐름
@@ -119,7 +119,7 @@ services:
 
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
-    image: frdel/agent-zero:latest
+    image: agent0ai/agent-zero:latest
     container_name: agent-zero
     ports:
       - "50001:80"
@@ -316,22 +316,33 @@ curl http://localhost:8317/v1/models
 
 ## 10. Agent Zero UI 모델 설정
 
-`http://localhost:50001` 접속 후 Settings에서 다음과 같이 설정:
+`http://localhost:50001` 접속 후 모델을 설정합니다.
 
-| Setting | Value |
-|---------|-------|
-| **Chat model provider** | `Other OpenAI compatible` |
-| **Chat model name** | `claude-sonnet-4-6` |
-| **Chat model API base URL** | `http://cliproxy:8317/v1` |
-| **API Key** | `sk-placeholder` |
-| **Context length** | `100000` |
-| **Supports Vision** | ON |
+### v1.8 이상: Plugins → _model_config
+
+v1.8부터 모델 설정은 **`_model_config` 플러그인**에서 관리합니다.
+
+UI → **Plugins** → **_model_config** 에서:
+
+| 항목 | 값 |
+|------|------|
+| **Chat Model Provider** | `Other OpenAI compatible` |
+| **Chat Model Name** | 사용할 모델명 (예: `gpt-4.1`, `o3`) |
+| **Chat Model API Base** | `http://cliproxy:8317/v1` |
+| **Chat Model API Key** | `sk-placeholder` |
+| **Utility Model Provider** | `Other OpenAI compatible` |
+| **Utility Model Name** | 경량 모델 (예: `gpt-4.1-mini`) |
+| **Utility Model API Base** | `http://cliproxy:8317/v1` |
+| **Utility Model API Key** | `sk-placeholder` |
+| **Embedding** | `huggingface` / `sentence-transformers/all-MiniLM-L6-v2` (기본 유지) |
+
+설정 파일 위치: `/a0/usr/plugins/_model_config/config.json`
 
 ### 주의사항
 
 - Provider를 `OpenAI`가 아닌 **`Other OpenAI compatible`** 선택
 - API base URL은 `localhost`가 아닌 **`cliproxy`** (Docker 내부 DNS)
-- `OPENAI_API_KEY` 환경변수가 `.env`에 없으면 `AuthenticationError` 발생
+- **API Key 필수** — CLIProxy가 검증하지 않아도 LiteLLM이 요구하므로 `sk-placeholder` 입력
 
 ---
 
@@ -755,5 +766,5 @@ docker compose up -d
 - [Agent Zero GitHub](https://github.com/agent0ai/agent-zero)
 - [CLIProxyAPI GitHub](https://github.com/router-for-me/CLIProxyAPI)
 - [CLIProxy Documentation](https://help.router-for.me/)
-- [Agent Zero Docker Hub](https://hub.docker.com/r/frdel/agent-zero)
+- [Agent Zero Docker Hub](https://hub.docker.com/r/agent0ai/agent-zero)
 - [CLIProxy Docker Hub](https://hub.docker.com/r/eceasy/cli-proxy-api)
