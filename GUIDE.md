@@ -489,6 +489,8 @@ volumes:
 
 Android 폰에서 Telegram을 통해 Agent Zero를 원격으로 제어할 수 있습니다. 포트포워딩이나 VPN 없이 동작합니다.
 
+> **주의**: Agent Zero v1.8에 `_telegram_integration` 내장 플러그인이 있지만, 기본 알림만 지원합니다. 이 프로젝트의 커스텀 Telegram Bridge는 웹 채팅 실시간 모니터링, 멀티채팅, 토큰 사용량 추적, 문서 열람 등 더 많은 기능을 제공합니다. **내장 `_telegram_integration` 플러그인은 끄고, 커스텀 Telegram Bridge를 사용하세요.**
+
 ### 동작 원리
 
 ```

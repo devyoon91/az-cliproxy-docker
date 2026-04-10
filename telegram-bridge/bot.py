@@ -394,8 +394,9 @@ async def send_to_agent_zero(message: str) -> str:
 
             az_context = data.get("context", az_context)
             # 모니터도 같은 컨텍스트 추적하도록 동기화
-            monitor_context = az_context
-            monitor_log_version = 0
+            if monitor_context != az_context:
+                monitor_context = az_context
+                monitor_log_version = await sync_log_version(az_context)
 
         return "✅ Agent Zero에 전달 완료. 응답은 자동으로 전송됩니다."
 
@@ -524,8 +525,10 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     az_context = ""
     monitor_context = ""
-    monitor_log_version = 0
     await close_az_session()
+    # 새 세션이므로 다음 poll에서 sync_log_version이 자동 처리
+    # 빈 컨텍스트는 poll 시 새 컨텍스트를 받아오며 그때 sync됨
+    monitor_log_version = await sync_log_version("")
     await update.message.reply_text("새 대화를 시작합니다.")
 
 
