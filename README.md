@@ -1,6 +1,9 @@
 # Agent Zero + CLIProxy Docker Setup
 
+> Agent Zero v1.8 | CLIProxy v6.9+
+
 Agent Zero AI 에이전트를 CLIProxy 기반으로 다양한 LLM과 연동하여 구동하는 Docker Compose 환경입니다.
+플러그인, Skills, MCP 서버, Telegram 원격 제어, Git/GitHub CLI 자동화를 포함합니다.
 
 ## Architecture
 
@@ -125,12 +128,25 @@ Agent Zero 컨테이너에서 Git clone/commit/push + PR 생성/이슈 관리가
 | `agent.system.main.role.md` | 에이전트 역할 정의 |
 | `agent.system.behaviour.md` | 행동 규칙 |
 | `agent.system.main.solving.md` | 문제 해결 전략 |
-| `agent.system.main.communication.md` | 커뮤니케이션 스타일 |
+| `agent.system.main.coding.md` | 코딩 가이드라인 |
 
 수정 후 반영:
 ```bash
 docker compose up -d agent-zero --force-recreate
 ```
+
+## v1.8 주요 기능
+
+| 기능 | 설명 |
+|------|------|
+| **플러그인 시스템** | 모듈식 확장 (Plugin Hub에서 설치, 핫 리로드) |
+| **Skills** | SKILL.md 표준 재사용 워크플로우 (Claude Code, Cursor 호환) |
+| **Projects** | 프로젝트 컨텍스트 관리 (Git 기반) |
+| **Secrets** | `§§secret(name)` 별칭으로 민감 정보 안전 관리 |
+| **A2A 통신** | FastA2A 호환 원격 에이전트 간 통신 |
+| **notify_user** | 작업 중 사용자 알림 (태스크 종료 없이) |
+| **_infection_check** | 프롬프트 인젝션 감지 플러그인 (기본 꺼짐, 토큰 비용) |
+| **Memory Hardening** | FAISS SHA-256 검증, 인젝션 필터 강화 |
 
 ## Available Models
 

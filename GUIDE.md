@@ -1,6 +1,8 @@
 # Agent Zero + CLIProxy 구축 가이드
 
-이 문서는 Agent Zero를 CLIProxy(Claude Code)와 연동하여 Docker 환경에서 구동하는 전체 과정을 단계별로 정리한 가이드입니다.
+> Agent Zero v1.8 | CLIProxy v6.9+
+
+이 문서는 Agent Zero를 CLIProxy와 연동하여 Docker 환경에서 구동하는 전체 과정을 단계별로 정리한 가이드입니다.
 
 ---
 
@@ -30,7 +32,7 @@
 ### 구성 요소
 
 - **Agent Zero** (`frdel/agent-zero`): 자율 AI 에이전트 프레임워크. LiteLLM을 통해 다양한 LLM 프로바이더를 지원하며, OpenAI 호환 API 엔드포인트에 연결할 수 있습니다.
-- **CLIProxy** (`eceasy/cli-proxy-api`): Claude Code CLI의 OAuth 인증을 활용하여 OpenAI 호환 REST API로 노출하는 프록시. Claude Pro/Max 구독을 API처럼 사용할 수 있게 해줍니다.
+- **CLIProxy** (`eceasy/cli-proxy-api`): 다양한 AI CLI 도구의 OAuth 인증을 활용하여 OpenAI 호환 REST API로 노출하는 프록시.
 
 ### 동작 흐름
 
