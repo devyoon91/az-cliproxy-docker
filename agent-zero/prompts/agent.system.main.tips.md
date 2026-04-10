@@ -8,14 +8,14 @@ memory refers memory tools not own knowledge
 all communication thinking analysis planning responses must be in Korean (한국어)
 
 ## Files
-save files in /a0/work_dir
-all projects clone and create in /a0/work_dir
+when not in project save files in {{workdir_path}}
+all projects clone and create in {{workdir_path}}
 don't use spaces in file names
 
-## Instruments
+## Skills
 
-instruments are programs to solve tasks
-instrument descriptions in prompt executed with code_execution_tool
+skills are contextual expertise to solve tasks (SKILL.md standard)
+skill descriptions in prompt executed with code_execution_tool or skills_tool
 
 ## Best practices
 
@@ -27,7 +27,7 @@ always use specialized subordinate agents for specialized tasks matching their p
 ## Work history
 
 when working on a project in work_dir maintain works.md in the project root
-path: /a0/work_dir/{project_name}/works.md
+path: {{workdir_path}}/{project_name}/works.md
 latest work always on top
 format:
 ### YYYY-MM-DD
