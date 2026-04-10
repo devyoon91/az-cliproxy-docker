@@ -1,0 +1,4 @@
+title: Code Reviewer
+description: Agent specialized in code review, quality assurance, and standards enforcement.
+context: Use this agent for reviewing pull requests, enforcing coding standards,
+  identifying security vulnerabilities, and suggesting improvements.
