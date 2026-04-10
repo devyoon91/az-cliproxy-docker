@@ -409,20 +409,45 @@ async def send_to_agent_zero(message: str) -> str:
 async def check_agent_zero_status() -> str:
     try:
         session = await get_az_session()
+        headers = get_headers()
+
+        # 기본 연결 확인
         async with session.get(
             f"{AZ_API_URL}/",
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
-            ctx_short = monitor_context[:8] + "..." if monitor_context else "없음"
-            if resp.status == 200:
-                return (
-                    f"Agent Zero: 정상 동작 중\n"
-                    f"CSRF Token: {'있음' if csrf_token else '없음'}\n"
-                    f"모니터링: {'켜짐' if monitor_enabled else '꺼짐'}\n"
-                    f"자동 추적: {'켜짐' if monitor_auto_follow else '꺼짐'}\n"
-                    f"현재 채팅: {ctx_short}"
-                )
-            return f"Agent Zero: 응답 코드 {resp.status}"
+            if resp.status != 200:
+                return f"Agent Zero: 응답 코드 {resp.status}"
+
+        # 설정 조회 (프로필, 모델 정보)
+        profile = "알 수 없음"
+        chat_model = "알 수 없음"
+        util_model = "알 수 없음"
+        try:
+            async with session.post(
+                f"{AZ_API_URL}/settings_get",
+                json={},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as settings_resp:
+                if settings_resp.status == 200:
+                    settings = await settings_resp.json()
+                    profile = settings.get("agent_profile", "알 수 없음")
+                    chat_model = settings.get("chat_model_name", "알 수 없음")
+                    util_model = settings.get("util_model_name", "알 수 없음")
+        except Exception:
+            pass
+
+        ctx_short = monitor_context[:8] + "..." if monitor_context else "없음"
+        return (
+            f"Agent Zero: 정상 동작 중\n\n"
+            f"📋 프로필: {profile}\n"
+            f"🤖 메인 모델: {chat_model}\n"
+            f"⚡ 유틸 모델: {util_model}\n\n"
+            f"모니터링: {'켜짐' if monitor_enabled else '꺼짐'}\n"
+            f"자동 추적: {'켜짐' if monitor_auto_follow else '꺼짐'}\n"
+            f"현재 채팅: {ctx_short}"
+        )
     except Exception as e:
         return f"Agent Zero: 연결 불가 - {str(e)}"
 
