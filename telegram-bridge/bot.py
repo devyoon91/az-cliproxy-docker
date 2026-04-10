@@ -125,6 +125,7 @@ async def get_az_session() -> aiohttp.ClientSession:
     try:
         async with az_session.get(
             f"{AZ_API_URL}{AZ_API_PREFIX}/csrf_token",
+            headers={"Origin": "http://localhost:50001"},
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status == 200:
@@ -148,7 +149,9 @@ async def close_az_session():
 
 
 def get_headers() -> dict:
-    headers = {}
+    headers = {
+        "Origin": "http://localhost:50001",  # v1.8 origin check bypass
+    }
     if csrf_token:
         headers["X-CSRF-Token"] = csrf_token
     return headers
