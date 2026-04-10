@@ -1,6 +1,8 @@
 # Telegram Bot 기능 가이드
 
-Agent Zero를 Android/iOS 폰에서 원격 제어하는 Telegram Bot 브릿지입니다.
+Agent Zero를 Android/iOS 폰에서 원격 제어하는 커스텀 Telegram Bot 브릿지입니다.
+
+> **중요**: Agent Zero v1.8에 `_telegram_integration` 내장 플러그인이 있지만, 기본 알림만 지원합니다. 이 커스텀 봇은 웹 채팅 모니터링, 멀티채팅, 토큰 추적 등 훨씬 풍부한 기능을 제공합니다. **내장 플러그인은 끄고 이 커스텀 봇을 사용하세요.**
 
 ---
 
@@ -189,6 +191,12 @@ curl http://telegram-bridge:8443/usage
 - aiohttp `CookieJar`로 쿠키 유지
 - CSRF 403 에러 시 자동 재발급 및 재시도
 - `/new` 시 세션 완전 리셋
+
+### 히스토리 스킵 (flooding 방지)
+채팅 전환, `/new`, `/switch`, `/monitor_on`, 자동 추적 시 이전 대화 로그가 일괄 전송되는 것을 방지합니다.
+- `sync_log_version()`으로 현재 시점의 log_version만 조용히 획득
+- 해당 시점 이후의 새 메시지만 Telegram에 전달
+- `monitor_log_version = 0` 직접 리셋은 초기 변수 선언 외에 사용하지 않음
 
 ### 환경변수
 
