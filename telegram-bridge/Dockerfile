@@ -4,7 +4,8 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
     python-telegram-bot==21.* \
-    aiohttp==3.*
+    aiohttp==3.* \
+    httpx
 
 COPY bot.py .
 

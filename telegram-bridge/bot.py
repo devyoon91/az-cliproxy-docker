@@ -52,7 +52,6 @@ tg_bot: Bot | None = None
 cached_contexts: list = []
 
 # ── 토큰 사용량 추적 ──
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 usage_today: dict = {
     "date": datetime.now().strftime("%Y-%m-%d"),
     "input_tokens": 0,
@@ -62,28 +61,37 @@ usage_today: dict = {
 }
 usage_history: list = []  # 최근 7일
 
-# 모델별 비용 (USD per 1M tokens) - 필요시 업데이트
-MODEL_COSTS = {
-    # OpenAI
-    "o3": {"input": 2.0, "output": 8.0},
-    "gpt-4.1": {"input": 2.0, "output": 8.0},
-    "gpt-4.1-mini": {"input": 0.4, "output": 1.6},
-    "gpt-4.1-nano": {"input": 0.1, "output": 0.4},
-    "gpt-4o": {"input": 2.5, "output": 10.0},
-    "gpt-4o-mini": {"input": 0.15, "output": 0.6},
-    # Anthropic (API 직접 사용 시)
-    "claude-opus-4-6": {"input": 15.0, "output": 75.0},
-    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-haiku-4-5-20251001": {"input": 0.8, "output": 4.0},
-    # 기본값 (알 수 없는 모델)
-    "_default": {"input": 2.0, "output": 8.0},
-}
+# LiteLLM 모델 가격표 (원격 자동 업데이트)
+_model_cost_map: dict = {}
+
+
+def _load_model_cost_map():
+    """LiteLLM의 최신 모델 가격표를 로드 (GitHub에서 자동 다운로드)"""
+    global _model_cost_map
+    try:
+        import httpx
+        resp = httpx.get(
+            "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            _model_cost_map = resp.json()
+            logger.info(f"[Cost] Loaded {len(_model_cost_map)} model prices from LiteLLM")
+            return
+    except Exception as e:
+        logger.warning(f"[Cost] Failed to fetch remote prices: {e}")
+
+    # fallback: 기본값
+    _model_cost_map = {}
+    logger.warning("[Cost] Using fallback cost estimation")
 
 
 def calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """모델별 토큰 비용 계산"""
-    costs = MODEL_COSTS.get(model, MODEL_COSTS["_default"])
-    return (input_tokens * costs["input"] + output_tokens * costs["output"]) / 1_000_000
+    """모델별 토큰 비용 계산 (LiteLLM 가격표 기반)"""
+    model_info = _model_cost_map.get(model, {})
+    input_cost = model_info.get("input_cost_per_token", 0.000002)  # fallback $2/1M
+    output_cost = model_info.get("output_cost_per_token", 0.000008)  # fallback $8/1M
+    return (input_tokens * input_cost) + (output_tokens * output_cost)
 
 
 def track_usage(model: str, input_tokens: int, output_tokens: int):
@@ -996,6 +1004,9 @@ async def post_init(application: Application):
 
 
 def main():
+    # LiteLLM 모델 가격표 로드 (GitHub에서 최신 다운로드)
+    _load_model_cost_map()
+
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
