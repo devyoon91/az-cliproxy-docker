@@ -97,7 +97,7 @@ version: "3.8"
 services:
   # ── CLIProxy: Claude Code CLI → OpenAI-compatible API ──
   cliproxy:
-    image: eceasy/cli-proxy-api:latest
+    image: eceasy/cli-proxy-api:v6.9.18
     container_name: cliproxy
     ports:
       - "8317:8317"   # OpenAI-compatible API
@@ -119,7 +119,7 @@ services:
 
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
-    image: agent0ai/agent-zero:latest
+    image: agent0ai/agent-zero:v1.8
     container_name: agent-zero
     ports:
       - "50001:80"
