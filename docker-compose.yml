@@ -41,6 +41,7 @@ services:
       - ./agent-zero/logs:/a0/logs
       - ./agent-zero/prompts:/a0/prompts
       - ./agent-zero/git-init.sh:/a0/git-init.sh:ro
+      - ./agent-zero/extensions/python/agent_init/_90_usage_tracker.py:/a0/extensions/python/agent_init/_90_usage_tracker.py:ro
       - ./agent-zero/settings.json:/a0/tmp/settings.json
     entrypoint: ["/bin/sh", "-c", "sh /a0/git-init.sh && exec /exe/initialize.sh ${BRANCH:-main}"]
     depends_on:
