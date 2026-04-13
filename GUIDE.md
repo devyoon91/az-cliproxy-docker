@@ -41,8 +41,8 @@
 사용자 → Agent Zero UI (50001)
            → LiteLLM (OpenAI 호환 요청)
               → CLIProxy (8317, OpenAI API 포맷)
-                 → Claude Code CLI (OAuth)
-                    → Claude AI (Anthropic)
+                 → LLM CLI (OAuth)
+                    → LLM Provider
 ```
 
 ---

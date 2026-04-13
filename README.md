@@ -2,6 +2,18 @@
 
 Agent Zero AI 에이전트를 CLIProxy 기반으로 다양한 LLM과 연동하여 구동하는 Docker Compose 환경입니다.
 
+## Spec
+
+| Component | Version | Image / Detail |
+|-----------|---------|----------------|
+| Agent Zero | v1.8 | `agent0ai/agent-zero:v1.8` |
+| CLIProxy | v6.9.18 | `eceasy/cli-proxy-api:v6.9.18` |
+| Telegram Bridge | custom | `python:3.12-slim` 기반 |
+| LiteLLM | 1.79.3 | Agent Zero 내장 |
+| Python | 3.12 | Agent Zero / Telegram Bridge |
+| Node.js | 22.x | Agent Zero 내장 |
+| Docker Compose | 3.8 | - |
+
 ## Architecture
 
 ```
