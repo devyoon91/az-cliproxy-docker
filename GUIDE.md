@@ -318,7 +318,7 @@ curl http://localhost:8317/v1/models
 
 `http://localhost:50001` 접속 후 모델을 설정합니다.
 
-### v1.8 이상: Plugins → _model_config
+### Plugins → _model_config
 
 v1.8부터 모델 설정은 **`_model_config` 플러그인**에서 관리합니다.
 

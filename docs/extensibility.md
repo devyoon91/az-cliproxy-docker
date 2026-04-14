@@ -1,27 +1,26 @@
-# Agent Zero 확장 가이드 (v1.8)
+# Agent Zero 확장 가이드
 
 > 원본: [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) (MIT License)
-> 버전: v1.8 (2026-04-08)
 
 ---
 
 ## 확장 가능한 컴포넌트
 
-v1.8에서 플러그인 시스템이 추가되어 확장 방식이 크게 개선되었습니다.
+플러그인 시스템이 추가되어 확장 방식이 크게 개선되었습니다.
 
 | 확장 방식 | 설명 | 복잡도 |
 |-----------|------|--------|
-| **플러그인** (v1.8) | 완전한 패키지 (백엔드 + API + UI) | 높음 |
+| **플러그인** | 완전한 패키지 (백엔드 + API + UI) | 높음 |
 | **Extensions** | 라이프사이클 훅 (Python) | 중간 |
 | **Tools** | 에이전트가 호출하는 도구 | 중간 |
 | **Instruments** | 실행 가능한 스크립트 | 낮음 |
-| **Skills** (v1.8) | SKILL.md 표준 재사용 가능 워크플로우 | 낮음 |
+| **Skills** | SKILL.md 표준 재사용 가능 워크플로우 | 낮음 |
 | **Agent Profiles** | 프로필별 프롬프트/도구 분리 | 낮음 |
 | **MCP 서버** | 외부 도구 연동 | 중간 |
 
 ---
 
-## 1. 플러그인 시스템 (v1.8 신규)
+## 1. 플러그인 시스템
 
 ### 구조
 
@@ -159,7 +158,7 @@ class MyTool(Tool):
 
 ---
 
-## 5. Skills (v1.8 신규)
+## 5. Skills
 
 SKILL.md 표준 기반 재사용 가능한 워크플로우. Claude Code, Cursor 등과 호환.
 
@@ -183,7 +182,7 @@ SKILL.md 표준 기반 재사용 가능한 워크플로우. Claude Code, Cursor 
   │   ├── prompts/
   │   ├── tools/
   │   ├── extensions/
-  │   └── plugins/         ← v1.8: 프로필별 플러그인 설정
+  │   └── plugins/       : 프로필별 플러그인 설정
   ├── developer/           ← 개발 전용 에이전트
   └── _example/
 ```
@@ -219,9 +218,9 @@ Settings → MCP Servers에서 JSON 입력 → 재시작
   ├── agent.system.main.solving.md      ← 문제 해결 전략
   ├── agent.system.main.coding.md       ← 코딩 규칙 (커스텀)
   ├── agent.system.main.tips.md         ← 운영 규칙
-  ├── agent.system.skills.md            ← 스킬 시스템 (v1.8)
-  ├── agent.system.projects.main.md     ← 프로젝트 시스템 (v1.8)
-  ├── agent.system.secrets.md           ← Secrets 관리 (v1.8)
+  ├── agent.system.skills.md            ← 스킬 시스템
+  ├── agent.system.projects.main.md     ← 프로젝트 시스템
+  ├── agent.system.secrets.md           ← Secrets 관리
   ├── agent.system.tool.*.md            ← 도구별 사용법
   └── fw.*.md                           ← 프레임워크 메시지
 ```
@@ -235,6 +234,6 @@ Settings → MCP Servers에서 JSON 입력 → 재시작
 ```markdown
 {{rules}}      ← Settings에서 설정한 행동 규칙 주입
 {{tools}}      ← 사용 가능한 도구 목록 자동 주입
-{{secrets}}    ← Secret 별칭 목록 (v1.8)
-{{vars}}       ← 일반 변수 목록 (v1.8)
+{{secrets}}    ← Secret 별칭 목록
+{{vars}}       ← 일반 변수 목록
 ```

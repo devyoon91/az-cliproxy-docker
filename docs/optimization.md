@@ -95,7 +95,7 @@ dedicated_context: false (기본)          dedicated_context: true
 
 `call_subordinate`로 호출하는 서브 에이전트는 Agent Zero가 자동으로 컨텍스트를 관리합니다.
 
-### 스킬 활용 (v1.8)
+### 스킬 활용
 
 스킬을 로드하면 처음부터 전문화된 지시가 적용되어 불필요한 탐색/시행착오가 줄어듭니다.
 
