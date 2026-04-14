@@ -136,25 +136,72 @@ Agent Zero에게 지시할 때 활용:
 
 ## 토큰 사용량 추적
 
-### /usage 명령
-오늘 사용량 + 최근 7일 기록을 조회합니다:
-```
-📊 토큰 사용량 (2026-04-09)
+### 동작 원리
 
-요청 수: 47
-입력 토큰: 125,340
-출력 토큰: 38,210
-예상 비용: $0.5562
+Agent Zero가 LLM을 호출할 때마다 LiteLLM Extension이 **모델명 + 입력/출력 토큰 수**를 자동으로 캡처하여 Telegram Bridge `/track` webhook으로 전송합니다.
+
+```
+Agent Zero → LLM 호출
+    ↓
+LiteLLM CustomLogger (Extension)
+    ↓ model, prompt_tokens, completion_tokens
+Telegram Bridge /track webhook
+    ↓ 모델별 집계 + 비용 계산
+/usage 명령으로 조회
+```
+
+### 추적되는 정보
+
+| 항목 | 설명 |
+|------|------|
+| `model` | 호출된 모델명 (예: `claude-sonnet-4-6`) |
+| `input_tokens` | 입력 토큰 수 (프롬프트 + 컨텍스트) |
+| `output_tokens` | 출력 토큰 수 (응답) |
+| `cost` | LiteLLM 가격표 기반 예상 비용 (USD) |
+
+모든 LLM 호출이 추적됩니다: 메인 모델(chat), 유틸리티 모델(요약/메모리), 브라우저 모델 등.
+
+### /usage 명령
+
+전체 합산 + 모델별 내역 + 최근 7일 기록을 조회합니다:
+```
+📊 토큰 사용량 (2026-04-14)
+
+총 요청: 15건
+총 입력: 12,500 토큰
+총 출력: 3,200 토큰
+총 비용: $0.0506
+
+🤖 모델별 내역:
+  claude-sonnet-4-6
+    9건 | in:10,200 out:2,800 | $0.0472
+  claude-haiku-4-5-20251001
+    6건 | in:2,300 out:400 | $0.0034
 
 📈 최근 기록:
-  2026-04-08: 62건, $0.7831
-  2026-04-07: 35건, $0.4120
+  2026-04-13: 9건, $0.0078
 
-💰 총 누적: $1.7513
+💰 총 누적: $0.0584
+```
+
+### /status 명령 (관련 정보)
+
+현재 사용 중인 모델과 프로필도 확인 가능합니다:
+```
+Agent Zero: 정상 동작 중
+
+📋 프로필: developer
+🤖 메인 모델: claude-sonnet-4-6
+⚡ 유틸 모델: claude-haiku-4-5-20251001
+
+모니터링: 켜짐
+자동 추적: 켜짐
+현재 채팅: 1188c4fe...
 ```
 
 ### 사용량 추적 Webhook
-외부에서 토큰 사용량을 기록할 수 있습니다:
+
+Agent Zero Extension이 자동 전송하지만, 외부에서 수동으로 기록할 수도 있습니다:
 ```bash
 curl -X POST http://telegram-bridge:8443/track \
      -H 'Content-Type: application/json' \
@@ -165,17 +212,18 @@ curl -X POST http://telegram-bridge:8443/track \
 ```bash
 curl http://telegram-bridge:8443/usage
 ```
+→ JSON으로 `today` (모델별 내역 포함) + `history` (최근 7일) 반환
 
 ### 일일 리포트
+
 매일 자정에 하루 사용량 요약이 Telegram으로 자동 전송됩니다.
 
-### 모델별 비용 테이블 (내장)
-| 모델 | 입력 ($/1M) | 출력 ($/1M) |
-|------|------------|------------|
-| o3 | $2.00 | $8.00 |
-| gpt-4.1 | $2.00 | $8.00 |
-| gpt-4.1-mini | $0.40 | $1.60 |
-| gpt-4.1-nano | $0.10 | $0.40 |
+### 비용 계산 방식
+
+- LiteLLM의 [model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)에서 **봇 시작 시 최신 가격표를 자동 다운로드**
+- 2,600+ 모델의 공식 가격 반영
+- 다운로드 실패 시 기본값 ($2/$8 per 1M tokens) fallback
+- 구독형(CLIProxy) 사용 시 실제 과금이 아닌 **참고용 추정치**
 
 ---
 
