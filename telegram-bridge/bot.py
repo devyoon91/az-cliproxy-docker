@@ -58,6 +58,7 @@ usage_today: dict = {
     "output_tokens": 0,
     "requests": 0,
     "cost_usd": 0.0,
+    "by_model": {},  # 모델별 집계
 }
 usage_history: list = []  # 최근 7일
 
@@ -112,12 +113,30 @@ def track_usage(model: str, input_tokens: int, output_tokens: int):
             "output_tokens": 0,
             "requests": 0,
             "cost_usd": 0.0,
+            "by_model": {},
         }
 
+    cost = calc_cost(model, input_tokens, output_tokens)
+
+    # 전체 합산
     usage_today["input_tokens"] += input_tokens
     usage_today["output_tokens"] += output_tokens
     usage_today["requests"] += 1
-    usage_today["cost_usd"] += calc_cost(model, input_tokens, output_tokens)
+    usage_today["cost_usd"] += cost
+
+    # 모델별 집계
+    if model not in usage_today["by_model"]:
+        usage_today["by_model"][model] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "requests": 0,
+            "cost_usd": 0.0,
+        }
+    m = usage_today["by_model"][model]
+    m["input_tokens"] += input_tokens
+    m["output_tokens"] += output_tokens
+    m["requests"] += 1
+    m["cost_usd"] += cost
 
 
 async def get_az_session() -> aiohttp.ClientSession:
@@ -826,11 +845,23 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = usage_today
     lines = [
         f"📊 토큰 사용량 ({today['date']})\n",
-        f"요청 수: {today['requests']}",
-        f"입력 토큰: {today['input_tokens']:,}",
-        f"출력 토큰: {today['output_tokens']:,}",
-        f"예상 비용: ${today['cost_usd']:.4f}",
+        f"총 요청: {today['requests']}건",
+        f"총 입력: {today['input_tokens']:,} 토큰",
+        f"총 출력: {today['output_tokens']:,} 토큰",
+        f"총 비용: ${today['cost_usd']:.4f}",
     ]
+
+    # 모델별 내역
+    by_model = today.get("by_model", {})
+    if by_model:
+        lines.append("\n🤖 모델별 내역:")
+        for model, stats in sorted(by_model.items(), key=lambda x: x[1]["cost_usd"], reverse=True):
+            lines.append(
+                f"  {model}\n"
+                f"    {stats['requests']}건 | "
+                f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,} | "
+                f"${stats['cost_usd']:.4f}"
+            )
 
     if usage_history:
         lines.append("\n📈 최근 기록:")
