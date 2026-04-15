@@ -51,10 +51,14 @@ Agent 0 (마스터, Developer)
 ```yaml
 # docker-compose.yml의 agent-zero 서비스에 추가
 volumes:
-  - ../az-agent-config-template/agents/reviewer:/a0/agents/reviewer:ro
-  - ../az-agent-config-template/agents/devops:/a0/agents/devops:ro
+  - ../az-agent-config-template/agents/reviewer:/a0/usr/agents/reviewer:ro
+  - ../az-agent-config-template/agents/devops:/a0/usr/agents/devops:ro
   # 추가 프로필...
 ```
+
+> **⚠️ 경로 주의**: 반드시 `/a0/usr/agents/`에 마운트하세요. `/a0/agents/`는 내장 프로필 디렉토리라 마운트하면 기존 프로필이 사라집니다.
+> - ✅ `/a0/usr/agents/reviewer` — 사용자 프로필 (내장과 자동 merge)
+> - ❌ `/a0/agents/reviewer` — 내장 프로필 덮어쓰기 위험
 
 ### 제공 프로필
 
@@ -112,7 +116,7 @@ You are Agent Zero 'DBA' - database expert specialized in...
 ### 3. docker-compose 마운트 추가
 
 ```yaml
-- ../az-agent-config-template/agents/dba:/a0/agents/dba:ro
+- ../az-agent-config-template/agents/dba:/a0/usr/agents/dba:ro
 ```
 
 ### 4. 재시작
