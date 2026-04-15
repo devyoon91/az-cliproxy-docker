@@ -610,6 +610,10 @@ my-agent-config/                 ← 개인화 저장소 (별도 관리)
 
 ### 개인화 저장소 생성
 
+템플릿을 fork하여 시작하는 것을 권장합니다:
+- **[az-agent-config-template](https://github.com/devyoon91/az-agent-config-template)** — 기본 프로필(reviewer, devops) + 디렉토리 구조 제공
+
+또는 직접 생성:
 ```bash
 mkdir my-agent-config
 cd my-agent-config

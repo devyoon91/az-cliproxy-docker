@@ -67,14 +67,14 @@ curl http://localhost:8317/v1/models
 | **LLM 연동** | CLIProxy 또는 API 직접 연결, 20+ 프로바이더 지원 | [GUIDE.md](GUIDE.md) |
 | **Telegram 원격 제어** | 폰에서 양방향 지시, 실시간 모니터링, 멀티채팅 | [telegram-bot.md](docs/telegram-bot.md) |
 | **Git + GitHub CLI** | clone/commit/push + PR 생성/이슈 관리 자동화 | [GUIDE.md](GUIDE.md#11-git--github-cli-자동화) |
-| **에이전트 프로필** | 서브 에이전트로 전문가 팀 구성 ([az-agent-config](https://github.com/devyoon91/az-agent-config) fork 활용) | [agent-profiles.md](docs/agent-profiles.md) |
+| **에이전트 프로필** | 서브 에이전트로 전문가 팀 구성 ([az-agent-config-template](https://github.com/devyoon91/az-agent-config-template) fork 활용) | [agent-profiles.md](docs/agent-profiles.md) |
 | **MCP 서버** | Sequential Thinking, Git, Fetch 등 도구 확장 | [mcp-guide.md](docs/mcp-guide.md) |
 | **스케줄러** | cron 기반 반복 실행, 예약 실행, 수동 실행 | [scheduler.md](docs/scheduler.md) |
 | **플러그인** | 18개 내장 플러그인, Plugin Hub, 핫 리로드 | [usage.md](docs/usage.md) |
 | **토큰 사용량 추적** | /usage 명령, 일일 리포트, 비용 모니터링 | [optimization.md](docs/optimization.md) |
 | **백업/복원** | 로컬 스크립트(full/config/light) + Telegram 원격 백업 | [backup.md](docs/backup.md) |
 | **프롬프트 커스텀** | 코딩 규칙, 한국어, 작업 이력 관리 | [GUIDE.md](GUIDE.md#12-프롬프트-커스터마이징) |
-| **개인화 분리** | 하네스 킷과 개인 설정을 별도 저장소로 관리 ([az-agent-config](https://github.com/devyoon91/az-agent-config)) | [GUIDE.md](GUIDE.md#16-팁-개인화-저장소-분리) |
+| **개인화 분리** | 하네스 킷과 개인 설정을 별도 저장소로 관리 ([az-agent-config-template](https://github.com/devyoon91/az-agent-config-template)) | [GUIDE.md](GUIDE.md#16-팁-개인화-저장소-분리) |
 
 ## Project Structure
 

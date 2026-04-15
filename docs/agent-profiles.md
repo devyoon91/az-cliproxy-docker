@@ -40,19 +40,19 @@ Agent 0 (마스터, Developer)
 ### 공개 레퍼런스
 
 범용 프로필 (reviewer, devops)은 공개 레퍼런스로 제공됩니다:
-- **[az-agent-config](https://github.com/devyoon91/az-agent-config)** — fork하여 회사/팀에 맞게 커스텀
+- **[az-agent-config-template](https://github.com/devyoon91/az-agent-config-template)** — fork하여 회사/팀에 맞게 커스텀
 
 ### 사용 방법
 
-1. `az-agent-config` 저장소를 fork 또는 clone
+1. `az-agent-config-template` 저장소를 fork 또는 clone
 2. 회사/팀 도메인에 맞는 프로필 추가
 3. docker-compose에 볼륨 마운트
 
 ```yaml
 # docker-compose.yml의 agent-zero 서비스에 추가
 volumes:
-  - ../az-agent-config/agents/reviewer:/a0/agents/reviewer:ro
-  - ../az-agent-config/agents/devops:/a0/agents/devops:ro
+  - ../az-agent-config-template/agents/reviewer:/a0/agents/reviewer:ro
+  - ../az-agent-config-template/agents/devops:/a0/agents/devops:ro
   # 추가 프로필...
 ```
 
@@ -68,7 +68,7 @@ volumes:
 fork한 저장소에 도메인 전문가를 추가합니다:
 
 ```
-az-agent-config/agents/
+az-agent-config-template/agents/
   ├── reviewer/       ← 범용 (fork 기본 제공)
   ├── devops/         ← 범용 (fork 기본 제공)
   ├── dba/            ← DB 설계/최적화 전문
@@ -112,7 +112,7 @@ You are Agent Zero 'DBA' - database expert specialized in...
 ### 3. docker-compose 마운트 추가
 
 ```yaml
-- ../az-agent-config/agents/dba:/a0/agents/dba:ro
+- ../az-agent-config-template/agents/dba:/a0/agents/dba:ro
 ```
 
 ### 4. 재시작
@@ -148,6 +148,6 @@ Agent 0가 자동으로:
 
 ## 참고
 
-- [az-agent-config (공개 레퍼런스)](https://github.com/devyoon91/az-agent-config)
+- [az-agent-config (공개 레퍼런스)](https://github.com/devyoon91/az-agent-config-template)
 - [개인화 저장소 분리 가이드 (GUIDE.md #16)](../GUIDE.md#16-팁-개인화-저장소-분리)
 - [Agent Zero 확장 가이드 — 에이전트 프로필](extensibility.md#6-agent-profiles-에이전트-프로필)
