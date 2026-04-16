@@ -25,7 +25,7 @@ services:
 
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
-    image: agent0ai/agent-zero:v1.8
+    image: agent0ai/agent-zero:v1.9
     container_name: agent-zero
     ports:
       - "50001:80"

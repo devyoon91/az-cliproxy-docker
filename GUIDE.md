@@ -1,6 +1,6 @@
 # Agent Zero + CLIProxy 구축 가이드
 
-> Agent Zero v1.8 | CLIProxy v6.9+
+> Agent Zero v1.9 | CLIProxy v6.9+
 
 이 문서는 Agent Zero를 CLIProxy와 연동하여 Docker 환경에서 구동하는 전체 과정을 단계별로 정리한 가이드입니다.
 
@@ -119,7 +119,7 @@ services:
 
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
-    image: agent0ai/agent-zero:v1.8
+    image: agent0ai/agent-zero:v1.9
     container_name: agent-zero
     ports:
       - "50001:80"
@@ -320,7 +320,7 @@ curl http://localhost:8317/v1/models
 
 ### Plugins → _model_config
 
-v1.8부터 모델 설정은 **`_model_config` 플러그인**에서 관리합니다.
+모델 설정은 **`_model_config` 플러그인**에서 관리합니다.
 
 UI → **Plugins** → **_model_config** 에서:
 
@@ -501,7 +501,7 @@ volumes:
 
 Android 폰에서 Telegram을 통해 Agent Zero를 원격으로 제어할 수 있습니다. 포트포워딩이나 VPN 없이 동작합니다.
 
-> **주의**: Agent Zero v1.8에 `_telegram_integration` 내장 플러그인이 있지만, 기본 알림만 지원합니다. 이 프로젝트의 커스텀 Telegram Bridge는 웹 채팅 실시간 모니터링, 멀티채팅, 토큰 사용량 추적, 문서 열람 등 더 많은 기능을 제공합니다. **내장 `_telegram_integration` 플러그인은 끄고, 커스텀 Telegram Bridge를 사용하세요.**
+> **주의**: Agent Zero에 `_telegram_integration` 내장 플러그인이 있지만, 기본 알림과 `/project`, `/config` 등 제한적 기능만 지원합니다. 이 프로젝트의 커스텀 Telegram Bridge는 웹 채팅 실시간 모니터링, 멀티채팅, 토큰 사용량 추적, 문서 열람 등 더 많은 기능을 제공합니다. **내장 `_telegram_integration` 플러그인은 끄고, 커스텀 Telegram Bridge를 사용하세요.**
 
 ### 동작 원리
 

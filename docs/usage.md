@@ -82,7 +82,8 @@
 | `_infection_check` | 프롬프트 인젝션 감지 | **꺼짐** (토큰 비용 증가) |
 | `_plugin_installer` | 플러그인 허브에서 설치/관리 | 켜짐 |
 | `_plugin_validator` | 플러그인 보안 검증 | 켜짐 |
-| `_telegram_integration` | Telegram 연동 | 꺼짐 |
+| `_a0_connector` | 호스트 CLI 연결 (HTTP/WebSocket) | 꺼짐 |
+| `_telegram_integration` | Telegram 연동 (`/project`, `/config` 지원) | 꺼짐 |
 | `_email_integration` | 이메일 연동 | 꺼짐 |
 | `_whatsapp_integration` | WhatsApp 연동 | 꺼짐 |
 | `_discovery` | 플러그인 탐색 | 켜짐 |
@@ -197,6 +198,21 @@ Settings → Backup 탭에서:
 - 활성화: Plugins → `_infection_check` → Enable
 - 외부 콘텐츠에서 악의적 지시를 감지하여 차단
 
+### SSRF 방어
+원격 문서 fetching 시 URL 검증으로 localhost 및 내부 IP 접근을 차단합니다. (CVE-2026-4308)
+
+### Path Traversal 방어
+다운로드 요청 시 런타임 디렉토리 외부 접근을 차단합니다. (CVE-2026-4307)
+
 ### Secrets 시스템
 - 민감한 정보는 `§§secret(name)` 별칭으로 안전하게 관리
 - 프롬프트/로그에 실제 값 노출 방지
+
+---
+
+## A0 CLI Connector
+
+`_a0_connector` 플러그인을 통해 호스트 측 CLI와 인증된 HTTP/WebSocket으로 연결할 수 있습니다. 원격 편집, capability discovery 등을 지원합니다.
+
+- 설정: `a0-setup-cli` 스킬로 가이드 제공
+- 활성화: Plugins → `_a0_connector` → Enable
