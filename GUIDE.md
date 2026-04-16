@@ -602,8 +602,9 @@ az-cliproxy-docker/              ← 하네스 킷 (이 저장소)
   └── agent-zero/agents/          ← 기본 프로필 (developer, reviewer, devops)
 
 my-agent-config/                 ← 개인화 저장소 (별도 관리)
+  ├── agents/                     ← Profile (서브 에이전트)
+  ├── skills/                     ← Skill (SKILL.md 기반 지침서)
   ├── knowledge/                  ← 코딩 표준, API 규칙, 아키텍처 문서
-  ├── agents/                     ← 프로필 오버라이드/추가
   ├── templates/                  ← 프로젝트 보일러플레이트
   └── instruments/                ← 커스텀 인스트루먼트
 ```
@@ -635,17 +636,36 @@ mkdir templates/springboot-api
 ```yaml
 # agent-zero 서비스의 volumes에 추가
 volumes:
-  # 지식베이스 (에이전트가 자동으로 참조)
-  - ../my-agent-config/knowledge:/a0/knowledge/custom/team
+  # ── 에이전트 프로필 (⚠️ 반드시 개별 마운트) ──
+  # - ../my-agent-config/agents/my-reviewer:/a0/usr/agents/my-reviewer:ro
+  # 프로필 추가 시 여기에 한 줄씩 추가
 
-  # 커스텀 인스트루먼트
-  - ../my-agent-config/instruments:/a0/instruments/custom
+  # ── 스킬 (✅ 통째 마운트 가능) ──
+  - ../my-agent-config/skills:/a0/usr/skills:ro
 
-  # 프로젝트 템플릿 (work_dir에서 접근)
+  # ── 지식베이스 (⚠️ 서브 디렉토리로 마운트) ──
+  - ../my-agent-config/knowledge:/a0/knowledge/custom/team:ro
+
+  # ── 아래는 통째 마운트 가능 ──
+  - ../my-agent-config/instruments:/a0/instruments/custom:ro
   - ../my-agent-config/templates:/a0/work_dir/templates:ro
 ```
 
 > **경로 주의**: `../my-agent-config`는 docker-compose.yml 기준 상대 경로입니다. 개인화 저장소를 같은 상위 디렉토리에 clone하세요.
+
+### Profile vs Skill
+
+개인화 저장소에서 두 가지 확장 방식을 지원합니다:
+
+| | Profile (`agents/`) | Skill (`skills/`) |
+|---|---|---|
+| 정체 | 독립된 전문가 에이전트 | 지침서/매뉴얼 (SKILL.md) |
+| 실행 | 별도 에이전트 인스턴스 생성 | 현재 에이전트에 지침 추가 |
+| 활성화 | `call_subordinate` 명시 호출 | `trigger_patterns` 키워드 자동 매칭 |
+| 마운트 | 개별 마운트 (`/a0/usr/agents/{이름}`) | 통째 마운트 (`/a0/usr/skills`) |
+| 적합한 경우 | 깊은 도메인 지식, 별도 인격 필요 | 절차/체크리스트, 가벼운 지침 |
+
+> **마운트 주의**: `agents/`는 내장 프로필(developer, researcher 등)이 덮어씌워지지 않도록 **개별 마운트** 필수. `skills/`는 `usr/skills/`가 내장 스킬과 분리되어 있어 **통째 마운트 안전**.
 
 ### 지식베이스 활용 예시
 
