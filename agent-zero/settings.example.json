@@ -1,8 +1,10 @@
 {
+    "_comment_provider": "프로바이더 선택: anthropic (권장, 프롬프트 캐싱 지원), openai, other (CLIProxy 등)",
+
     "version": "v0.9.3",
-    "chat_model_provider": "other",
-    "chat_model_name": "your-chat-model",
-    "chat_model_api_base": "http://cliproxy:8317/v1",
+    "chat_model_provider": "anthropic",
+    "chat_model_name": "claude-sonnet-4-6",
+    "chat_model_api_base": "",
     "chat_model_kwargs": {
         "temperature": "0"
     },
@@ -12,9 +14,9 @@
     "chat_model_rl_requests": 0,
     "chat_model_rl_input": 0,
     "chat_model_rl_output": 0,
-    "util_model_provider": "other",
-    "util_model_name": "your-utility-model",
-    "util_model_api_base": "http://cliproxy:8317/v1",
+    "util_model_provider": "anthropic",
+    "util_model_name": "claude-haiku-3.5-sonnet",
+    "util_model_api_base": "",
     "util_model_ctx_length": 100000,
     "util_model_ctx_input": 0.7,
     "util_model_kwargs": {
@@ -29,9 +31,9 @@
     "embed_model_kwargs": {},
     "embed_model_rl_requests": 0,
     "embed_model_rl_input": 0,
-    "browser_model_provider": "other",
-    "browser_model_name": "your-chat-model",
-    "browser_model_api_base": "http://cliproxy:8317/v1",
+    "browser_model_provider": "anthropic",
+    "browser_model_name": "claude-haiku-3.5-sonnet",
+    "browser_model_api_base": "",
     "browser_model_vision": true,
     "browser_model_kwargs": {
         "temperature": "0"
