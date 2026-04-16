@@ -1003,26 +1003,38 @@ async def run_webhook_server():
 # ── 일일 사용량 리포트 스케줄러 ──
 async def daily_usage_reporter():
     """매일 자정에 일일 사용량 리포트를 Telegram으로 전송"""
-    await asyncio.sleep(30)  # 초기 대기
     logger.info("Daily usage reporter started")
 
     while True:
         now = datetime.now()
-        # 다음 자정까지 대기
+        # 다음 자정(00:01)까지 대기
         tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=1, second=0, microsecond=0)
         wait_seconds = (tomorrow - now).total_seconds()
+        if wait_seconds < 60:
+            # 자정 직전이면 다음날로
+            wait_seconds += 86400
         await asyncio.sleep(wait_seconds)
 
         # 어제 사용량 리포트
         if usage_today["requests"] > 0:
-            report = (
-                f"📊 일일 사용량 리포트 ({usage_today['date']})\n\n"
-                f"요청 수: {usage_today['requests']}건\n"
-                f"입력 토큰: {usage_today['input_tokens']:,}\n"
-                f"출력 토큰: {usage_today['output_tokens']:,}\n"
-                f"예상 비용: ${usage_today['cost_usd']:.4f}"
-            )
-            await send_telegram(report)
+            lines = [
+                f"📊 일일 사용량 리포트 ({usage_today['date']})\n",
+                f"총 요청: {usage_today['requests']}건",
+                f"총 입력: {usage_today['input_tokens']:,} 토큰",
+                f"총 출력: {usage_today['output_tokens']:,} 토큰",
+                f"총 비용: ${usage_today['cost_usd']:.4f}",
+            ]
+            by_model = usage_today.get("by_model", {})
+            if by_model:
+                lines.append("\n🤖 모델별 내역:")
+                for model, stats in sorted(by_model.items(), key=lambda x: x[1]["cost_usd"], reverse=True):
+                    lines.append(
+                        f"  {model}\n"
+                        f"    {stats['requests']}건 | "
+                        f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,} | "
+                        f"${stats['cost_usd']:.4f}"
+                    )
+            await send_telegram("\n".join(lines))
 
 
 # ── Post-init: 모니터 시작 ──
