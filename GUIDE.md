@@ -186,6 +186,10 @@ auth: {}
 
 > **주의**: `auth-dir` 필드를 반드시 명시해야 합니다. 누락 시 `failed to create auth directory: mkdir: no such file or directory` 오류가 발생합니다.
 
+> **보안 주의 — Management UI 비밀번호**: `cliproxy/config.example.yaml`의 `secret-key: "your-management-password"`는 **placeholder**입니다. CLIProxy Management UI(http://localhost:8085)를 사용할 계획이라면 **실제 강력한 비밀번호로 반드시 교체**하세요. 최초 접속 시 자동으로 해시 변환됩니다.
+>
+> Anthropic API 모드(`chat_model_provider: "anthropic"`)로만 운영하는 경우 CLIProxy는 단순 의존성으로만 기동되고 Management UI를 쓰지 않으므로 즉시 위험은 없지만, `8085` 포트가 호스트로 노출(`docker-compose.yml`)되므로 **placeholder 그대로 두지 말 것**.
+
 ---
 
 ## 6. Agent Zero 환경변수 설정
