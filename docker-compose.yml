@@ -50,7 +50,7 @@ services:
       - ./agent-zero/extensions/python/tool_execute_after/_50_task_report_tool_end.py:/a0/extensions/python/tool_execute_after/_50_task_report_tool_end.py:ro
       - ./agent-zero/extensions/python/chat_model_call_after/_50_task_report_llm.py:/a0/extensions/python/chat_model_call_after/_50_task_report_llm.py:ro
       - ./agent-zero/extensions/python/monologue_end/_50_task_report_finish.py:/a0/extensions/python/monologue_end/_50_task_report_finish.py:ro
-      - ./agent-zero/settings.json:/a0/tmp/settings.json
+      - ./agent-zero/settings.json:/a0/usr/settings.json
     entrypoint: ["/bin/sh", "-c", "sh /a0/git-init.sh && exec /exe/initialize.sh ${BRANCH:-main}"]
     depends_on:
       cliproxy:
