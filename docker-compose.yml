@@ -32,6 +32,7 @@ services:
     env_file:
       - .env
     environment:
+      - TZ=Asia/Seoul  # /today /week 집계 및 로그 타임스탬프를 KST 로 일관화 (issue #24)
       - GIT_USER_NAME=${GIT_USER_NAME}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
@@ -55,6 +56,9 @@ services:
       - ./agent-zero/extensions/python/tool_execute_before/_50_task_report_tool_start.py:/a0/extensions/python/tool_execute_before/_50_task_report_tool_start.py:ro
       - ./agent-zero/extensions/python/tool_execute_after/_50_task_report_tool_end.py:/a0/extensions/python/tool_execute_after/_50_task_report_tool_end.py:ro
       - ./agent-zero/extensions/python/chat_model_call_after/_50_task_report_llm.py:/a0/extensions/python/chat_model_call_after/_50_task_report_llm.py:ro
+      # Wave 2 (issue #24): util_model_call_after fires from agent.py but had
+      # no extension listening — ~71 Haiku calls/day were missing from task JSON.
+      - ./agent-zero/extensions/python/util_model_call_after/_50_task_report_util_llm.py:/a0/extensions/python/util_model_call_after/_50_task_report_util_llm.py:ro
       - ./agent-zero/extensions/python/monologue_end/_50_task_report_finish.py:/a0/extensions/python/monologue_end/_50_task_report_finish.py:ro
       - ./agent-zero/settings.json:/a0/usr/settings.json
     entrypoint: ["/bin/sh", "-c", "sh /a0/git-init.sh && exec /exe/initialize.sh ${BRANCH:-main}"]
@@ -70,6 +74,7 @@ services:
     build: ./telegram-bridge
     container_name: telegram-bridge
     environment:
+      - TZ=Asia/Seoul  # /today /week 경계 + daily usage reset 을 KST 로 일관화 (issue #24)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - AZ_API_URL=http://agent-zero:80

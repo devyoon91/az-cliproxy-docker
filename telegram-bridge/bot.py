@@ -13,11 +13,26 @@ import logging
 import json
 import io
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 import aiohttp
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from aiohttp import web, CookieJar
+
+# ── Timezone ──
+# 모든 /today /week /tasks 날짜 경계와 daily-usage reset 은 KST 로 정규화한다.
+# 컨테이너 OS 타임존(Docker 기본=UTC)과 무관하게 일관된 일자 경계를 보장.
+KST = ZoneInfo("Asia/Seoul")
+
+
+def _kst_now() -> datetime:
+    """Current time as a naive datetime in KST wall-clock.
+
+    Naive 로 반환하는 이유: 기존 `_filter_date_range` 비교 로직이 naive 기준이라
+    호환성을 유지하기 위함. 내부적으로는 모두 KST 기준이다.
+    """
+    return datetime.now(KST).replace(tzinfo=None)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -53,7 +68,7 @@ cached_contexts: list = []
 
 # ── 토큰 사용량 추적 ──
 usage_today: dict = {
-    "date": datetime.now().strftime("%Y-%m-%d"),
+    "date": _kst_now().strftime("%Y-%m-%d"),
     "input_tokens": 0,
     "output_tokens": 0,
     "cache_read_tokens": 0,
@@ -137,6 +152,22 @@ def calc_cost(
     )
 
 
+def _normalize_model(model: str) -> str:
+    """Canonicalize model name before aggregating.
+
+    LiteLLM's kwargs["model"] and the stream-probe POST sometimes carry the
+    provider prefix (`anthropic/claude-sonnet-4-6`) and sometimes don't
+    (`claude-sonnet-4-6`). Without this the `by_model` dict splits one model
+    into two rows with mismatched cache/cost stats. Mirrors the same helper
+    now living in agent-zero/lib/task_report.py (issue #24 Wave 2).
+    """
+    if not isinstance(model, str) or not model:
+        return model
+    if model.startswith("anthropic/"):
+        return model.split("/", 1)[1]
+    return model
+
+
 def track_usage(
     model: str,
     input_tokens: int,
@@ -146,7 +177,9 @@ def track_usage(
 ):
     """사용량 누적 (cache tokens 포함)"""
     global usage_today
-    today = datetime.now().strftime("%Y-%m-%d")
+    # Collapse provider-prefixed and bare forms so /today by_model stays unified.
+    model = _normalize_model(model)
+    today = _kst_now().strftime("%Y-%m-%d")
 
     # 날짜가 바뀌면 리셋
     if usage_today["date"] != today:
@@ -964,9 +997,10 @@ def _aggregate(tasks: list[dict]) -> dict:
 def _filter_date_range(tasks: list[dict], start, end) -> list[dict]:
     """Filter tasks whose `started_at` (ISO, UTC) falls in [start, end).
 
-    `start` and `end` are `datetime` objects (naive; treated as local time).
-    AZ writes started_at in UTC with +00:00 offset, so we compare with
-    the task's UTC instant by parsing the full ISO string.
+    `start` and `end` are naive `datetime` objects treated as **KST wall clock**.
+    AZ writes started_at in UTC with +00:00 offset; we convert each task's
+    UTC instant to KST before comparing, so "today" means "today in KST"
+    regardless of the container OS timezone.
     """
     out = []
     for t in tasks:
@@ -978,12 +1012,61 @@ def _filter_date_range(tasks: list[dict], start, end) -> list[dict]:
             ts = datetime.fromisoformat(started)
         except Exception:
             continue
-        # Compare in local time (user's wall clock) since /today means "today
-        # in my timezone."
-        ts_local = ts.astimezone().replace(tzinfo=None) if ts.tzinfo else ts
+        # Normalize to KST wall-clock for date-boundary comparison.
+        if ts.tzinfo:
+            ts_local = ts.astimezone(KST).replace(tzinfo=None)
+        else:
+            ts_local = ts  # assume caller already passed KST-naive
         if start <= ts_local < end:
             out.append(t)
     return out
+
+
+def _data_quality_summary(tasks: list[dict]) -> dict:
+    """Scan a task list for known observability gaps (M1/M2/M3 evolution).
+
+    These gaps mean the per-task cost / token numbers drift from Anthropic
+    Console reality. We surface the counts in /today and /week so the user
+    knows when to trust the number.
+
+    Returns:
+        {
+          "total":       total tasks in window,
+          "legacy_cost": tasks without totals.cost_usd (pre-M3 schema),
+          "approximate": tasks with any approximate-token LLM call (pre-M2 str
+                         response bug),
+        }
+    """
+    legacy_cost = 0
+    approximate = 0
+    for t in tasks:
+        totals = t.get("totals") or {}
+        if "cost_usd" not in totals:
+            legacy_cost += 1
+        for c in t.get("llm_calls") or []:
+            if c.get("tokens_approximate"):
+                approximate += 1
+                break
+    return {
+        "total": len(tasks),
+        "legacy_cost": legacy_cost,
+        "approximate": approximate,
+    }
+
+
+def _quality_banner(dq: dict) -> str | None:
+    """Return a one-line caveat if any data quality gap is present, else None."""
+    if dq["legacy_cost"] == 0 and dq["approximate"] == 0:
+        return None
+    parts = []
+    if dq["legacy_cost"]:
+        parts.append(f"M3 이전 {dq['legacy_cost']}건")
+    if dq["approximate"]:
+        parts.append(f"근사 토큰 {dq['approximate']}건")
+    return (
+        "⚠️ 신뢰도: " + " / ".join(parts)
+        + " — Anthropic 대시보드와 차이 있을 수 있음"
+    )
 
 
 def _format_agg_block(title: str, agg: dict) -> list[str]:
@@ -1011,16 +1094,21 @@ def _format_agg_block(title: str, agg: dict) -> list[str]:
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Today's task aggregate from on-disk JSONs."""
+    """Today's task aggregate from on-disk JSONs (KST boundary)."""
     if update.effective_chat.id != CHAT_ID:
         return
     tasks = _load_task_jsons()
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = _kst_now().replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today_start + timedelta(days=1)
     todays = _filter_date_range(tasks, today_start, tomorrow)
     agg = _aggregate(todays)
 
-    lines = _format_agg_block(f"오늘 ({today_start.strftime('%Y-%m-%d')})", agg)
+    lines = _format_agg_block(f"오늘 ({today_start.strftime('%Y-%m-%d')} KST)", agg)
+
+    # Data quality caveat (issue #24)
+    banner = _quality_banner(_data_quality_summary(todays))
+    if banner:
+        lines.insert(1, banner)
 
     by_model = agg.get("by_model", {})
     if by_model:
@@ -1039,16 +1127,22 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Last 7 days: daily breakdown + grand totals."""
+    """Last 7 days: daily breakdown + grand totals (KST boundary)."""
     if update.effective_chat.id != CHAT_ID:
         return
     all_tasks = _load_task_jsons()
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = _kst_now().replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=6)  # last 7 days including today
     week_end = today_start + timedelta(days=1)
     window = _filter_date_range(all_tasks, week_start, week_end)
 
-    lines = [f"📈 최근 7일 ({week_start.strftime('%m-%d')} ~ {today_start.strftime('%m-%d')})\n"]
+    lines = [f"📈 최근 7일 ({week_start.strftime('%m-%d')} ~ {today_start.strftime('%m-%d')} KST)"]
+
+    # Data quality caveat (issue #24)
+    banner = _quality_banner(_data_quality_summary(window))
+    if banner:
+        lines.append(banner)
+    lines.append("")
 
     # Per-day rows
     days_with_data = 0
