@@ -20,6 +20,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    # Agent Zero ships this helper; same function it uses internally in
+    # models.py to size cache-history chunks. Graceful fallback if absent.
+    from helpers.tokens import approximate_tokens  # type: ignore
+except Exception:  # pragma: no cover - only runs inside AZ container
+    def approximate_tokens(text: str) -> int:  # type: ignore
+        return 0
+
 logger = logging.getLogger(__name__)
 
 TASKS_DIR = Path("/a0/logs/tasks")
@@ -144,28 +152,79 @@ def _extract_cache_tokens(usage) -> tuple[int, int]:
     return read, creation
 
 
-def llm_call(agent, call_data, response) -> None:
+def _estimate_input_tokens(call_data) -> int:
+    if not isinstance(call_data, dict):
+        return 0
+    messages = call_data.get("messages") or []
+    try:
+        text = json.dumps(messages, ensure_ascii=False, default=str)
+    except Exception:
+        text = str(messages)
+    try:
+        return int(approximate_tokens(text) or 0)
+    except Exception:
+        return 0
+
+
+def _estimate_output_tokens(response, reasoning) -> int:
+    parts = []
+    if isinstance(response, str) and response:
+        parts.append(response)
+    if isinstance(reasoning, str) and reasoning:
+        parts.append(reasoning)
+    if not parts:
+        return 0
+    try:
+        return int(approximate_tokens("\n".join(parts)) or 0)
+    except Exception:
+        return 0
+
+
+def llm_call(agent, call_data, response, reasoning=None) -> None:
+    """Record an LLM call.
+
+    Agent Zero v1.9 note: the `chat_model_call_after` hook receives `response`
+    as a *string* (the assembled completion text), not a LiteLLM
+    `ModelResponse`. `_parse_chunk` in /a0/models.py strips `usage` from
+    streaming chunks, so real token counts and Anthropic cache fields are
+    unreachable from this hook.
+
+    As a stopgap we approximate input/output via `helpers.tokens.approximate_tokens`
+    (same function Agent Zero uses itself) and mark the entry with
+    `tokens_approximate=True`. Real cache tokens require bridging from the
+    LiteLLM callback layer (`_90_usage_tracker.py`) — tracked separately.
+    """
     r = get_report(agent)
     if r is None:
         return
-    # Resolve model name as a string.
-    # - response.model is the LiteLLM-normalized string (preferred)
-    # - call_data["model"] is Agent Zero's model *object*, not serializable
+    # Resolve model name as a string. In v1.9, `response` is a str, so fall
+    # back to call_data["model"].model_name (LiteLLMChatWrapper attribute).
     model = None
-    if response is not None:
-        model = getattr(response, "model", None)
-    if not isinstance(model, str) and isinstance(call_data, dict):
+    if isinstance(call_data, dict):
         m = call_data.get("model")
         model = getattr(m, "model_name", None) or getattr(m, "name", None)
+    # Belt-and-suspenders: if a future version ever passes a ModelResponse.
+    if not isinstance(model, str) and response is not None:
+        rm = getattr(response, "model", None)
+        if isinstance(rm, str):
+            model = rm
     if not isinstance(model, str):
         model = None
+
+    # Prefer real usage if it ever becomes available (future-proof).
     usage = getattr(response, "usage", None) if response is not None else None
-    input_tokens = 0
-    output_tokens = 0
     if usage is not None:
         input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
-    cache_read, cache_creation = _extract_cache_tokens(usage)
+        cache_read, cache_creation = _extract_cache_tokens(usage)
+        approximate = False
+    else:
+        input_tokens = _estimate_input_tokens(call_data)
+        output_tokens = _estimate_output_tokens(response, reasoning)
+        cache_read = 0
+        cache_creation = 0
+        approximate = True
+
     r["llm_calls"].append({
         "at": _now_iso(),
         "model": model,
@@ -173,6 +232,7 @@ def llm_call(agent, call_data, response) -> None:
         "output_tokens": output_tokens,
         "cache_read_tokens": cache_read,
         "cache_creation_tokens": cache_creation,
+        "tokens_approximate": approximate,
     })
 
 
