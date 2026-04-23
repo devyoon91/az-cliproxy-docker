@@ -192,12 +192,21 @@ def save_task(agent) -> None:
 
 
 def sweep_orphans() -> int:
-    """Mark any leftover pending JSONs as orphaned. Called once on AZ startup
-    from an agent_init extension. Any file still reporting
-    `ended_reason == "pending"` at startup means the previous process died
-    mid-run or the task was cancelled (monologue_end never fired).
+    """Mark stale/legacy task JSONs with a proper `ended_reason`.
 
-    Returns the number of files rewritten.
+    Called once on AZ startup from an agent_init extension. Two fixes:
+
+    1. Any file with `ended_reason == "pending"` at startup — previous
+       process died mid-run or the task was cancelled (monologue_end
+       never fired). Promoted to `"orphaned"` with `ended_at=now`.
+
+    2. Legacy files (from before M2.1) that never had an `ended_reason`
+       field but do have an `ended_at` timestamp — clearly a completed
+       run. Tagged `"completed"` so /today aggregates don't lump them in
+       with true pendings. Files lacking BOTH fields are left alone
+       (shouldn't happen but best to be conservative).
+
+    Returns the total number of files rewritten.
     """
     count = 0
     try:
@@ -208,9 +217,18 @@ def sweep_orphans() -> int:
                 data = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if data.get("ended_reason") == ENDED_PENDING:
+            changed = False
+            reason = data.get("ended_reason")
+            if reason == ENDED_PENDING:
                 data["ended_reason"] = ENDED_ORPHANED
                 data.setdefault("ended_at", _now_iso())
+                changed = True
+            elif reason is None and data.get("ended_at"):
+                # Legacy (pre-M2.1) JSON — annotate the completion state
+                # instead of defaulting aggregation code to "pending".
+                data["ended_reason"] = ENDED_COMPLETED
+                changed = True
+            if changed:
                 try:
                     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                     count += 1
@@ -219,7 +237,7 @@ def sweep_orphans() -> int:
     except Exception as e:
         logger.warning(f"[task_report] sweep_orphans error: {e}")
     if count:
-        logger.info(f"[task_report] sweep_orphans: marked {count} file(s) as orphaned")
+        logger.info(f"[task_report] sweep_orphans: rewrote {count} file(s)")
     return count
 
 
