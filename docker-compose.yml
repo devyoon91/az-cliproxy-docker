@@ -32,6 +32,7 @@ services:
     env_file:
       - .env
     environment:
+      - TZ=Asia/Seoul  # /today /week 집계 및 로그 타임스탬프를 KST 로 일관화 (issue #24)
       - GIT_USER_NAME=${GIT_USER_NAME}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
@@ -70,6 +71,7 @@ services:
     build: ./telegram-bridge
     container_name: telegram-bridge
     environment:
+      - TZ=Asia/Seoul  # /today /week 경계 + daily usage reset 을 KST 로 일관화 (issue #24)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - AZ_API_URL=http://agent-zero:80
