@@ -30,23 +30,41 @@ class UsageLogger(CustomLogger):
     def _track(self, kwargs, response_obj):
         try:
             model = kwargs.get("model", "unknown")
-            usage = getattr(response_obj, "usage", None)
 
-            if usage:
-                input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                output_tokens = getattr(usage, "completion_tokens", 0) or 0
-                # Anthropic cache fields (passed through by LiteLLM)
-                cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-                cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
-                # OpenAI cache field (fallback)
-                details = getattr(usage, "prompt_tokens_details", None)
-                if details is not None:
-                    cache_read += getattr(details, "cached_tokens", 0) or 0
-            else:
-                input_tokens = 0
-                output_tokens = 0
-                cache_read = 0
-                cache_creation = 0
+            # LiteLLM aggregates streaming chunks into `standard_logging_object`
+            # with fully-resolved usage, including Anthropic native cache fields
+            # (cache_read_input_tokens / cache_creation_input_tokens from
+            # message_start/message_delta). This path works for both streaming
+            # (Sonnet chat_model) and non-streaming (Haiku util_model).
+            # `response_obj.usage` alone is insufficient for streams because
+            # the callback may receive an interim ModelResponseStream rather
+            # than the aggregated ModelResponse. See issue #13.
+            slo = kwargs.get("standard_logging_object") or {}
+
+            input_tokens = 0
+            output_tokens = 0
+            cache_read = 0
+            cache_creation = 0
+
+            if slo:
+                input_tokens = slo.get("prompt_tokens", 0) or 0
+                output_tokens = slo.get("completion_tokens", 0) or 0
+                cache_read = slo.get("cache_read_input_tokens", 0) or 0
+                cache_creation = slo.get("cache_creation_input_tokens", 0) or 0
+
+            # Fallback to response_obj.usage if standard_logging_object missing
+            # or empty (older LiteLLM versions, edge cases).
+            if input_tokens == 0 and output_tokens == 0:
+                usage = getattr(response_obj, "usage", None)
+                if usage:
+                    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    output_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                    cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                    # OpenAI cache field
+                    details = getattr(usage, "prompt_tokens_details", None)
+                    if details is not None:
+                        cache_read += getattr(details, "cached_tokens", 0) or 0
 
             if input_tokens == 0 and output_tokens == 0:
                 return
