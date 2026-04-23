@@ -306,6 +306,26 @@ def _extract_cache_tokens(usage) -> tuple[int, int]:
     return read, creation
 
 
+def _normalize_model(model: str | None) -> str | None:
+    """Canonicalize a model identifier before it lands in task JSON.
+
+    LiteLLM sometimes emits `anthropic/claude-sonnet-4-6` (provider-prefixed
+    form, used on the stream/util path) and sometimes `claude-sonnet-4-6`
+    (bare form, used on the chat path). Downstream aggregators — /today's
+    per-model breakdown, task summaries, /usage group-bys — compare by raw
+    string, so the two forms get charted as separate models despite being
+    identical. Strip the prefix here so every aggregator sees one name.
+
+    Keeps unknown providers (e.g. `openai/gpt-4o`) untouched — only
+    Anthropic drifts between the two forms inside AZ today (issue #24).
+    """
+    if not isinstance(model, str) or not model:
+        return model
+    if model.startswith("anthropic/"):
+        return model.split("/", 1)[1]
+    return model
+
+
 def _estimate_input_tokens(call_data) -> int:
     if not isinstance(call_data, dict):
         return 0
@@ -364,6 +384,11 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
             model = rm
     if not isinstance(model, str):
         model = None
+
+    # Collapse provider-prefixed and bare forms into a single canonical key so
+    # per-model aggregates don't split the same model into two rows. See
+    # `_normalize_model` docstring.
+    model = _normalize_model(model)
 
     # Priority:
     # 1) ContextVar from stream-usage-capture extension (real + cache fields)
