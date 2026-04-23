@@ -56,6 +56,8 @@ usage_today: dict = {
     "date": datetime.now().strftime("%Y-%m-%d"),
     "input_tokens": 0,
     "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0,
     "requests": 0,
     "cost_usd": 0.0,
     "by_model": {},  # 모델별 집계
@@ -87,16 +89,62 @@ def _load_model_cost_map():
     logger.warning("[Cost] Using fallback cost estimation")
 
 
-def calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """모델별 토큰 비용 계산 (LiteLLM 가격표 기반)"""
-    model_info = _model_cost_map.get(model, {})
-    input_cost = model_info.get("input_cost_per_token", 0.000002)  # fallback $2/1M
-    output_cost = model_info.get("output_cost_per_token", 0.000008)  # fallback $8/1M
-    return (input_tokens * input_cost) + (output_tokens * output_cost)
+def _model_info(model: str) -> dict:
+    """Resolve a model name against the LiteLLM price map with AZ aliasing.
+
+    AZ tags streaming calls as "anthropic/claude-sonnet-4-6" but LiteLLM
+    keys them as "claude-sonnet-4-5-20250929". Try the exact key first,
+    then a few known aliases, then strip the `anthropic/` prefix.
+    """
+    if model in _model_cost_map:
+        return _model_cost_map[model]
+    aliases = {
+        "anthropic/claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
+        "anthropic/claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    }
+    if model in aliases and aliases[model] in _model_cost_map:
+        return _model_cost_map[aliases[model]]
+    if model.startswith("anthropic/"):
+        tail = model.split("/", 1)[1]
+        if tail in _model_cost_map:
+            return _model_cost_map[tail]
+    return {}
 
 
-def track_usage(model: str, input_tokens: int, output_tokens: int):
-    """사용량 누적"""
+def calc_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> float:
+    """Cache-aware cost calc. On Anthropic the provider-reported
+    `input_tokens` is already the regular-input-only count (cache_read /
+    cache_creation are billed separately), so we don't subtract — we just
+    price each bucket at its own rate.
+    """
+    info = _model_info(model)
+    in_rate = info.get("input_cost_per_token", 0.000003)      # $3 / 1M fallback
+    out_rate = info.get("output_cost_per_token", 0.000015)    # $15 / 1M
+    read_rate = info.get("cache_read_input_token_cost", in_rate * 0.10)
+    create_rate = info.get("cache_creation_input_token_cost", in_rate * 1.25)
+    return (
+        max(0, int(input_tokens)) * in_rate
+        + max(0, int(output_tokens)) * out_rate
+        + max(0, int(cache_read_tokens)) * read_rate
+        + max(0, int(cache_creation_tokens)) * create_rate
+    )
+
+
+def track_usage(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+):
+    """사용량 누적 (cache tokens 포함)"""
     global usage_today
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -104,37 +152,42 @@ def track_usage(model: str, input_tokens: int, output_tokens: int):
     if usage_today["date"] != today:
         if usage_today["requests"] > 0:
             usage_history.append(usage_today.copy())
-            # 최근 7일만 유지
             while len(usage_history) > 7:
                 usage_history.pop(0)
         usage_today = {
             "date": today,
             "input_tokens": 0,
             "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
             "requests": 0,
             "cost_usd": 0.0,
             "by_model": {},
         }
 
-    cost = calc_cost(model, input_tokens, output_tokens)
+    cost = calc_cost(model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
 
-    # 전체 합산
     usage_today["input_tokens"] += input_tokens
     usage_today["output_tokens"] += output_tokens
+    usage_today["cache_read_tokens"] = usage_today.get("cache_read_tokens", 0) + cache_read_tokens
+    usage_today["cache_creation_tokens"] = usage_today.get("cache_creation_tokens", 0) + cache_creation_tokens
     usage_today["requests"] += 1
     usage_today["cost_usd"] += cost
 
-    # 모델별 집계
     if model not in usage_today["by_model"]:
         usage_today["by_model"][model] = {
             "input_tokens": 0,
             "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
             "requests": 0,
             "cost_usd": 0.0,
         }
     m = usage_today["by_model"][model]
     m["input_tokens"] += input_tokens
     m["output_tokens"] += output_tokens
+    m["cache_read_tokens"] = m.get("cache_read_tokens", 0) + cache_read_tokens
+    m["cache_creation_tokens"] = m.get("cache_creation_tokens", 0) + cache_creation_tokens
     m["requests"] += 1
     m["cost_usd"] += cost
 
@@ -498,7 +551,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /new → 새 대화 시작\n"
         "• /logs → 전체 로그 파일 전송\n"
         "• /docs → 문서 목록/열람\n"
-        "• /usage → 토큰 사용량/비용 조회\n"
+        "• /usage → 세션 내 토큰/비용 (휘발성)\n"
+        "• /today → 오늘의 태스크 집계 (task JSON 기반)\n"
+        "• /week → 최근 7일 집계\n"
+        "• /tasks [N] → 최근 N개 태스크 목록\n"
         "• /backup → 설정 백업 파일 전송\n"
         "• /monitor_on → 모니터링 켜기\n"
         "• /monitor_off → 모니터링 끄기\n"
@@ -837,40 +893,279 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"백업 실패: {str(e)}")
 
 
+# ── Task JSON aggregation (issue #1 M2) ──
+TASKS_DIR = "/app/tasks"
+
+
+def _load_task_jsons() -> list[dict]:
+    """Read every task JSON from the mounted AZ logs dir.
+
+    Returns a list of parsed dicts sorted by `started_at` ascending.
+    Malformed files are skipped silently; they show up in logs once and
+    then get ignored so /today doesn't crash on a single bad file.
+    """
+    if not os.path.isdir(TASKS_DIR):
+        return []
+    items: list[dict] = []
+    for name in os.listdir(TASKS_DIR):
+        if not name.endswith(".json") or name.endswith(".tmp"):
+            continue
+        path = os.path.join(TASKS_DIR, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                items.append(json.load(f))
+        except Exception as e:
+            logger.debug(f"skip bad task json {name}: {e}")
+    items.sort(key=lambda r: r.get("started_at") or "")
+    return items
+
+
+def _aggregate(tasks: list[dict]) -> dict:
+    """Sum totals across a list of tasks, also grouping by model and status."""
+    agg = {
+        "tasks": len(tasks),
+        "completed": 0,
+        "orphaned": 0,
+        "pending": 0,
+        "tool_calls": 0,
+        "llm_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cost_usd": 0.0,
+        "by_model": {},
+    }
+    for t in tasks:
+        reason = t.get("ended_reason", "pending")
+        if reason in agg:
+            agg[reason] += 1
+        totals = t.get("totals") or {}
+        for k in ("tool_calls", "llm_calls", "input_tokens", "output_tokens",
+                  "cache_read_tokens", "cache_creation_tokens"):
+            agg[k] += int(totals.get(k, 0) or 0)
+        agg["cost_usd"] += float(totals.get("cost_usd", 0.0) or 0.0)
+        for c in t.get("llm_calls") or []:
+            m = c.get("model") or "unknown"
+            bucket = agg["by_model"].setdefault(m, {
+                "calls": 0, "input": 0, "output": 0,
+                "cache_read": 0, "cache_create": 0, "cost": 0.0,
+            })
+            bucket["calls"] += 1
+            bucket["input"] += int(c.get("input_tokens", 0) or 0)
+            bucket["output"] += int(c.get("output_tokens", 0) or 0)
+            bucket["cache_read"] += int(c.get("cache_read_tokens", 0) or 0)
+            bucket["cache_create"] += int(c.get("cache_creation_tokens", 0) or 0)
+            bucket["cost"] += float(c.get("cost_usd", 0.0) or 0.0)
+    agg["cost_usd"] = round(agg["cost_usd"], 6)
+    return agg
+
+
+def _filter_date_range(tasks: list[dict], start, end) -> list[dict]:
+    """Filter tasks whose `started_at` (ISO, UTC) falls in [start, end).
+
+    `start` and `end` are `datetime` objects (naive; treated as local time).
+    AZ writes started_at in UTC with +00:00 offset, so we compare with
+    the task's UTC instant by parsing the full ISO string.
+    """
+    out = []
+    for t in tasks:
+        started = t.get("started_at")
+        if not started:
+            continue
+        try:
+            # fromisoformat handles "+00:00"
+            ts = datetime.fromisoformat(started)
+        except Exception:
+            continue
+        # Compare in local time (user's wall clock) since /today means "today
+        # in my timezone."
+        ts_local = ts.astimezone().replace(tzinfo=None) if ts.tzinfo else ts
+        if start <= ts_local < end:
+            out.append(t)
+    return out
+
+
+def _format_agg_block(title: str, agg: dict) -> list[str]:
+    """Render an aggregate dict as a Telegram-friendly block."""
+    lines = [
+        f"📊 {title}",
+        f"  태스크: {agg['tasks']}건 "
+        f"(✅{agg['completed']} ⚠️{agg['orphaned']} ⏳{agg['pending']})",
+    ]
+    if agg["tasks"] == 0:
+        return lines
+    lines.append(
+        f"  LLM 호출: {agg['llm_calls']}건 · 도구: {agg['tool_calls']}건"
+    )
+    lines.append(
+        f"  토큰: in {agg['input_tokens']:,} · out {agg['output_tokens']:,}"
+    )
+    if agg["cache_read_tokens"] or agg["cache_creation_tokens"]:
+        lines.append(
+            f"  캐시: read {agg['cache_read_tokens']:,} · "
+            f"create {agg['cache_creation_tokens']:,}"
+        )
+    lines.append(f"  💰 ${agg['cost_usd']:.4f}")
+    return lines
+
+
+async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Today's task aggregate from on-disk JSONs."""
+    if update.effective_chat.id != CHAT_ID:
+        return
+    tasks = _load_task_jsons()
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow = today_start + timedelta(days=1)
+    todays = _filter_date_range(tasks, today_start, tomorrow)
+    agg = _aggregate(todays)
+
+    lines = _format_agg_block(f"오늘 ({today_start.strftime('%Y-%m-%d')})", agg)
+
+    by_model = agg.get("by_model", {})
+    if by_model:
+        lines.append("\n🤖 모델별:")
+        for model, b in sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True):
+            cache = (
+                f" | cache r:{b['cache_read']:,} c:{b['cache_create']:,}"
+                if (b["cache_read"] or b["cache_create"]) else ""
+            )
+            lines.append(
+                f"  • {model}: {b['calls']}× "
+                f"in {b['input']:,} out {b['output']:,}{cache} → ${b['cost']:.4f}"
+            )
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Last 7 days: daily breakdown + grand totals."""
+    if update.effective_chat.id != CHAT_ID:
+        return
+    all_tasks = _load_task_jsons()
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=6)  # last 7 days including today
+    week_end = today_start + timedelta(days=1)
+    window = _filter_date_range(all_tasks, week_start, week_end)
+
+    lines = [f"📈 최근 7일 ({week_start.strftime('%m-%d')} ~ {today_start.strftime('%m-%d')})\n"]
+
+    # Per-day rows
+    days_with_data = 0
+    for i in range(7):
+        day_start = week_start + timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
+        day_tasks = _filter_date_range(window, day_start, day_end)
+        if not day_tasks:
+            continue
+        days_with_data += 1
+        agg = _aggregate(day_tasks)
+        lines.append(
+            f"  {day_start.strftime('%m-%d')}: "
+            f"{agg['tasks']}건 · {agg['llm_calls']} LLM · ${agg['cost_usd']:.4f}"
+        )
+
+    if days_with_data == 0:
+        lines.append("  (데이터 없음)")
+
+    # Grand total
+    grand = _aggregate(window)
+    lines.append("")
+    lines.extend(_format_agg_block("주간 합계", grand))
+    by_model = grand.get("by_model", {})
+    if by_model:
+        lines.append("\n🤖 모델별 (주간):")
+        for model, b in sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True):
+            lines.append(f"  • {model}: {b['calls']}× → ${b['cost']:.4f}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List the most recent N tasks with individual summaries (default 10)."""
+    if update.effective_chat.id != CHAT_ID:
+        return
+    n = 10
+    args = context.args
+    if args:
+        try:
+            n = max(1, min(50, int(args[0])))
+        except ValueError:
+            pass
+    tasks = _load_task_jsons()
+    recent = list(reversed(tasks[-n:]))
+    if not recent:
+        await update.message.reply_text("최근 태스크가 없습니다.")
+        return
+
+    lines = [f"🗂 최근 {len(recent)}개 태스크\n"]
+    status_icon = {"completed": "✅", "orphaned": "⚠️", "pending": "⏳"}
+    for t in recent:
+        tid = t.get("task_id", "?")
+        reason = t.get("ended_reason", "pending")
+        icon = status_icon.get(reason, "•")
+        elapsed = t.get("elapsed_sec", 0) or 0
+        totals = t.get("totals") or {}
+        cost = totals.get("cost_usd", 0.0) or 0.0
+        # Short HH:MM:SS from task_id (task-YYYYMMDD-HHMMSS-xxxxxx)
+        parts = tid.split("-")
+        when = "?"
+        if len(parts) >= 3 and len(parts[2]) == 6:
+            when = f"{parts[2][:2]}:{parts[2][2:4]}:{parts[2][4:6]}"
+        lines.append(
+            f"{icon} {when} {elapsed:.0f}s · "
+            f"LLM {totals.get('llm_calls', 0)} · "
+            f"도구 {totals.get('tool_calls', 0)} · "
+            f"${cost:.4f}"
+        )
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """토큰 사용량 조회"""
+    """토큰 사용량 + 비용 조회 (cache 토큰 포함)"""
     if update.effective_chat.id != CHAT_ID:
         return
 
     today = usage_today
-    lines = [
-        f"📊 토큰 사용량 ({today['date']})\n",
-        f"총 요청: {today['requests']}건",
-        f"총 입력: {today['input_tokens']:,} 토큰",
-        f"총 출력: {today['output_tokens']:,} 토큰",
-        f"총 비용: ${today['cost_usd']:.4f}",
-    ]
+    cache_read = today.get("cache_read_tokens", 0)
+    cache_create = today.get("cache_creation_tokens", 0)
 
-    # 모델별 내역
+    # 캐시 절약 추정치: cache_read 만큼은 90% 할인된다고 가정 (Anthropic)
+    # 실절약 = cache_read × (input_rate - cache_read_rate) → 대략 input × 0.9
+    # 여기선 단순히 "정가라면 얼마였을지"만 보여준다.
+    lines = [
+        f"📊 오늘의 사용량 ({today['date']})\n",
+        f"요청: {today['requests']}건",
+        f"입력: {today['input_tokens']:,}  |  출력: {today['output_tokens']:,}",
+    ]
+    if cache_read or cache_create:
+        lines.append(
+            f"캐시: read {cache_read:,}  |  create {cache_create:,}"
+        )
+    lines.append(f"비용: ${today['cost_usd']:.4f}")
+
     by_model = today.get("by_model", {})
     if by_model:
-        lines.append("\n🤖 모델별 내역:")
+        lines.append("\n🤖 모델별:")
         for model, stats in sorted(by_model.items(), key=lambda x: x[1]["cost_usd"], reverse=True):
+            cr = stats.get("cache_read_tokens", 0)
+            cc = stats.get("cache_creation_tokens", 0)
+            cache_part = f" | cache r:{cr:,} c:{cc:,}" if (cr or cc) else ""
             lines.append(
                 f"  {model}\n"
                 f"    {stats['requests']}건 | "
-                f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,} | "
-                f"${stats['cost_usd']:.4f}"
+                f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,}{cache_part}\n"
+                f"    ${stats['cost_usd']:.4f}"
             )
 
     if usage_history:
-        lines.append("\n📈 최근 기록:")
+        lines.append("\n📈 최근 7일:")
         total_cost = 0.0
         for day in reversed(usage_history[-7:]):
             lines.append(f"  {day['date']}: {day['requests']}건, ${day['cost_usd']:.4f}")
             total_cost += day["cost_usd"]
         total_cost += today["cost_usd"]
-        lines.append(f"\n💰 총 누적: ${total_cost:.4f}")
+        lines.append(f"\n💰 7일+오늘 누적: ${total_cost:.4f}")
 
     await update.message.reply_text("\n".join(lines))
 
@@ -930,7 +1225,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /follow_off → 채팅 자동 추적 끄기\n\n"
         "상태/비용:\n"
         "  /status → Agent Zero 상태 확인\n"
-        "  /usage → 토큰 사용량 및 비용 조회\n"
+        "  /usage → 세션 내 토큰/비용 (bridge 재시작 시 초기화)\n"
+        "  /today → 오늘의 태스크 집계 (영구 데이터)\n"
+        "  /week → 최근 7일 일별 + 합계\n"
+        "  /tasks [N] → 최근 N개 태스크 목록 (기본 10)\n"
         "  /backup → 설정 경량 백업 (ZIP 파일 전송)\n"
         "  /help → 도움말"
     )
@@ -961,17 +1259,24 @@ async def webhook_handler(request):
 
 
 async def usage_track_handler(request):
-    """HTTP POST로 토큰 사용량 기록
-    Usage: curl -X POST http://telegram-bridge:8443/track \
-           -H 'Content-Type: application/json' \
-           -d '{"model": "gpt-4.1", "input_tokens": 1500, "output_tokens": 500}'
+    """HTTP POST로 토큰 사용량 기록 (cache 토큰 포함).
+
+    Payload: {
+        "model": "anthropic/claude-sonnet-4-6",
+        "input_tokens": 1500,
+        "output_tokens": 500,
+        "cache_read_tokens": 0,     # optional (Anthropic prompt caching)
+        "cache_creation_tokens": 0  # optional
+    }
     """
     try:
         data = await request.json()
         model = data.get("model", "unknown")
         input_tokens = int(data.get("input_tokens", 0))
         output_tokens = int(data.get("output_tokens", 0))
-        track_usage(model, input_tokens, output_tokens)
+        cache_read = int(data.get("cache_read_tokens", 0))
+        cache_creation = int(data.get("cache_creation_tokens", 0))
+        track_usage(model, input_tokens, output_tokens, cache_read, cache_creation)
         return web.json_response({
             "ok": True,
             "today": usage_today,
@@ -1060,6 +1365,9 @@ def main():
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("docs", cmd_docs))
     app.add_handler(CommandHandler("usage", cmd_usage))
+    app.add_handler(CommandHandler("today", cmd_today))
+    app.add_handler(CommandHandler("week", cmd_week))
+    app.add_handler(CommandHandler("tasks", cmd_tasks))
     app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))

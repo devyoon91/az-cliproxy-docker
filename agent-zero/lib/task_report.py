@@ -15,6 +15,7 @@ extension files can `from helpers.task_report import ...`.
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from contextvars import ContextVar
@@ -36,6 +37,16 @@ try:
 except Exception:  # pragma: no cover - only runs inside AZ container
     def approximate_tokens(text: str) -> int:  # type: ignore
         return 0
+
+try:
+    # Shared pricing helper. Ships with the repo as /a0/helpers/pricing.py
+    # via docker-compose mount; falls back to a no-cost stub if the mount
+    # is missing so task_report never crashes a monologue.
+    from helpers.pricing import compute_cost  # type: ignore
+except Exception:  # pragma: no cover - only runs inside AZ container
+    def compute_cost(model=None, input_tokens=0, output_tokens=0,
+                     cache_read_tokens=0, cache_creation_tokens=0) -> float:  # type: ignore
+        return 0.0
 
 logger = logging.getLogger(__name__)
 
@@ -117,13 +128,17 @@ def get_report(agent):
 
 
 def _compute_totals(report: dict) -> dict:
+    calls = report.get("llm_calls") or []
     return {
         "tool_calls": len(report.get("tool_calls") or []),
-        "llm_calls": len(report.get("llm_calls") or []),
-        "input_tokens": sum(c.get("input_tokens", 0) for c in report.get("llm_calls") or []),
-        "output_tokens": sum(c.get("output_tokens", 0) for c in report.get("llm_calls") or []),
-        "cache_read_tokens": sum(c.get("cache_read_tokens", 0) for c in report.get("llm_calls") or []),
-        "cache_creation_tokens": sum(c.get("cache_creation_tokens", 0) for c in report.get("llm_calls") or []),
+        "llm_calls": len(calls),
+        "input_tokens": sum(c.get("input_tokens", 0) for c in calls),
+        "output_tokens": sum(c.get("output_tokens", 0) for c in calls),
+        "cache_read_tokens": sum(c.get("cache_read_tokens", 0) for c in calls),
+        "cache_creation_tokens": sum(c.get("cache_creation_tokens", 0) for c in calls),
+        # Per-call `cost_usd` is authoritative; we sum rather than re-computing
+        # from totals so model-mix inside one task is priced accurately.
+        "cost_usd": round(sum(c.get("cost_usd", 0.0) or 0.0 for c in calls), 6),
     }
 
 
@@ -177,12 +192,21 @@ def save_task(agent) -> None:
 
 
 def sweep_orphans() -> int:
-    """Mark any leftover pending JSONs as orphaned. Called once on AZ startup
-    from an agent_init extension. Any file still reporting
-    `ended_reason == "pending"` at startup means the previous process died
-    mid-run or the task was cancelled (monologue_end never fired).
+    """Mark stale/legacy task JSONs with a proper `ended_reason`.
 
-    Returns the number of files rewritten.
+    Called once on AZ startup from an agent_init extension. Two fixes:
+
+    1. Any file with `ended_reason == "pending"` at startup — previous
+       process died mid-run or the task was cancelled (monologue_end
+       never fired). Promoted to `"orphaned"` with `ended_at=now`.
+
+    2. Legacy files (from before M2.1) that never had an `ended_reason`
+       field but do have an `ended_at` timestamp — clearly a completed
+       run. Tagged `"completed"` so /today aggregates don't lump them in
+       with true pendings. Files lacking BOTH fields are left alone
+       (shouldn't happen but best to be conservative).
+
+    Returns the total number of files rewritten.
     """
     count = 0
     try:
@@ -193,9 +217,18 @@ def sweep_orphans() -> int:
                 data = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if data.get("ended_reason") == ENDED_PENDING:
+            changed = False
+            reason = data.get("ended_reason")
+            if reason == ENDED_PENDING:
                 data["ended_reason"] = ENDED_ORPHANED
                 data.setdefault("ended_at", _now_iso())
+                changed = True
+            elif reason is None and data.get("ended_at"):
+                # Legacy (pre-M2.1) JSON — annotate the completion state
+                # instead of defaulting aggregation code to "pending".
+                data["ended_reason"] = ENDED_COMPLETED
+                changed = True
+            if changed:
                 try:
                     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                     count += 1
@@ -204,7 +237,7 @@ def sweep_orphans() -> int:
     except Exception as e:
         logger.warning(f"[task_report] sweep_orphans error: {e}")
     if count:
-        logger.info(f"[task_report] sweep_orphans: marked {count} file(s) as orphaned")
+        logger.info(f"[task_report] sweep_orphans: rewrote {count} file(s)")
     return count
 
 
@@ -368,6 +401,18 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
         cache_creation = 0
         approximate = True
 
+    # Price the call. When tokens are approximate (no real stream usage was
+    # captured), we still compute a cost — it's labelled approximate via
+    # `tokens_approximate=True`, and skipping pricing entirely would lose the
+    # fallback-path volume in /usage dashboards.
+    cost = compute_cost(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_creation,
+    )
+
     r["llm_calls"].append({
         "at": _now_iso(),
         "model": model,
@@ -375,19 +420,86 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
         "output_tokens": output_tokens,
         "cache_read_tokens": cache_read,
         "cache_creation_tokens": cache_creation,
+        "cost_usd": cost,
         "tokens_approximate": approximate,
     })
 
 
+TELEGRAM_BRIDGE_NOTIFY_URL = os.environ.get(
+    "TELEGRAM_BRIDGE_URL", "http://telegram-bridge:8443/notify"
+)
+TASK_SUMMARY_ENABLED = os.environ.get("AZ_TASK_SUMMARY", "1") not in ("0", "false", "False")
+
+
+def _format_task_summary(snapshot: dict) -> str:
+    """Compact Telegram-friendly per-task summary.
+
+    Shown on `monologue_end` after `finish_task` writes the final JSON.
+    Opt out with env var `AZ_TASK_SUMMARY=0`.
+    """
+    totals = snapshot.get("totals") or {}
+    elapsed = snapshot.get("elapsed_sec") or 0
+    cost_usd = totals.get("cost_usd", 0.0) or 0.0
+
+    # Group llm_calls by model for the breakdown
+    by_model: dict[str, dict] = {}
+    for c in snapshot.get("llm_calls") or []:
+        m = c.get("model") or "unknown"
+        bucket = by_model.setdefault(m, {
+            "calls": 0, "input": 0, "output": 0,
+            "cache_read": 0, "cache_create": 0, "cost": 0.0,
+        })
+        bucket["calls"] += 1
+        bucket["input"] += c.get("input_tokens", 0) or 0
+        bucket["output"] += c.get("output_tokens", 0) or 0
+        bucket["cache_read"] += c.get("cache_read_tokens", 0) or 0
+        bucket["cache_create"] += c.get("cache_creation_tokens", 0) or 0
+        bucket["cost"] += c.get("cost_usd", 0.0) or 0.0
+
+    lines = [
+        f"✅ 태스크 완료 ({snapshot.get('task_id', '?')})",
+        f"⏱ {elapsed:.1f}s  🔧 tools {totals.get('tool_calls', 0)}  💬 LLM {totals.get('llm_calls', 0)}",
+        f"💰 ${cost_usd:.4f}",
+    ]
+    if by_model:
+        for model, b in sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True):
+            cache_part = (
+                f" | cache r:{b['cache_read']:,} c:{b['cache_create']:,}"
+                if (b["cache_read"] or b["cache_create"]) else ""
+            )
+            lines.append(
+                f"  • {model}: {b['calls']}× "
+                f"in {b['input']:,} out {b['output']:,}{cache_part} → ${b['cost']:.4f}"
+            )
+    return "\n".join(lines)
+
+
+def _post_task_summary(snapshot: dict) -> None:
+    if not TASK_SUMMARY_ENABLED:
+        return
+    try:
+        import requests  # local import so we don't pay the cost on happy-path imports
+    except Exception:
+        return
+    try:
+        text = _format_task_summary(snapshot)
+        requests.post(TELEGRAM_BRIDGE_NOTIFY_URL, json={"text": text}, timeout=3)
+    except Exception as e:
+        # Never let notification failure impact the monologue shutdown.
+        logger.debug(f"[task_report] summary post failed: {e}")
+
+
 def finish_task(agent) -> dict | None:
     """Finalize report and write to disk. Called from monologue_end on the
-    normal completion path. Marks `ended_reason="completed"`.
+    normal completion path. Marks `ended_reason="completed"` and fires a
+    Telegram summary (fire-and-forget, disable with `AZ_TASK_SUMMARY=0`).
 
     NOTE: monologue_end does NOT fire on asyncio.CancelledError (kill via UI
     stop or api_terminate_chat). For those paths, the periodic saves from
     `save_task()` leave the latest snapshot on disk with
     `ended_reason="pending"`, and `sweep_orphans()` at next AZ startup
-    promotes them to "orphaned".
+    promotes them to "orphaned". No summary is posted on cancel by design —
+    a cancelled task is incomplete work, not a delivery.
     """
     r = get_report(agent)
     if r is None:
@@ -396,6 +508,14 @@ def finish_task(agent) -> dict | None:
     r["ended_reason"] = ENDED_COMPLETED
     try:
         _write_report(r, final=True)
+        # Build a snapshot with computed totals/elapsed for the notification.
+        summary_snapshot = dict(r)
+        started_ts = summary_snapshot.get("started_ts")
+        if isinstance(started_ts, (int, float)):
+            summary_snapshot["elapsed_sec"] = round(time.time() - started_ts, 3)
+        summary_snapshot.pop("started_ts", None)
+        summary_snapshot["totals"] = _compute_totals(summary_snapshot)
+        _post_task_summary(summary_snapshot)
     finally:
         agent.data.pop(DATA_KEY, None)
         agent.data.pop(PENDING_TOOL_KEY, None)
