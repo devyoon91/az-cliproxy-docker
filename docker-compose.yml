@@ -77,6 +77,8 @@ services:
       - ./docs:/app/docs:ro
       - ./GUIDE.md:/app/GUIDE.md:ro
       - ./README.md:/app/README.md:ro
+      # M4: read AZ task JSONs for /today, /week, /tasks aggregation commands
+      - ./agent-zero/logs/tasks:/app/tasks:ro
     ports:
       - "8443:8443"   # 알림 webhook (내부용)
     depends_on:
