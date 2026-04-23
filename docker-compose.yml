@@ -46,6 +46,8 @@ services:
       - ./agent-zero/extensions/python/agent_init/_91_chunk_usage_probe.py:/a0/extensions/python/agent_init/_91_chunk_usage_probe.py:ro
       # Task post-report system (M1: raw capture) — issue #1
       - ./agent-zero/lib/task_report.py:/a0/helpers/task_report.py:ro
+      # M2.1: startup sweep marks leftover pending JSONs as orphaned (cancel/kill)
+      - ./agent-zero/extensions/python/agent_init/_80_task_report_sweep.py:/a0/extensions/python/agent_init/_80_task_report_sweep.py:ro
       - ./agent-zero/extensions/python/monologue_start/_50_task_report_begin.py:/a0/extensions/python/monologue_start/_50_task_report_begin.py:ro
       - ./agent-zero/extensions/python/message_loop_start/_50_task_report_iter.py:/a0/extensions/python/message_loop_start/_50_task_report_iter.py:ro
       - ./agent-zero/extensions/python/tool_execute_before/_50_task_report_tool_start.py:/a0/extensions/python/tool_execute_before/_50_task_report_tool_start.py:ro

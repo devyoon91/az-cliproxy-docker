@@ -43,6 +43,15 @@ TASKS_DIR = Path("/a0/logs/tasks")
 DATA_KEY = "task_report"
 PENDING_TOOL_KEY = "task_report_pending_tools"
 
+# ended_reason values:
+#   "pending"   — task is still running (written by begin_task + periodic saves)
+#   "completed" — monologue_end fired normally (finish_task marked it)
+#   "orphaned"  — a prior AZ process died or the task was cancelled; set by the
+#                 startup sweep on any JSON it finds still in "pending" state.
+ENDED_PENDING = "pending"
+ENDED_COMPLETED = "completed"
+ENDED_ORPHANED = "orphaned"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -69,7 +78,15 @@ def _preview(args, max_len: int = 120) -> str:
 
 
 def begin_task(agent) -> dict:
-    """Initialize a fresh report blob on agent.data. Called from monologue_start."""
+    """Initialize a fresh report blob on agent.data. Called from monologue_start.
+
+    Writes the initial JSON to disk immediately with `ended_reason="pending"`.
+    Periodic saves from message_loop_start / tool_execute_after keep it fresh
+    so that cancel/kill paths (where monologue_end is skipped and
+    asyncio.CancelledError propagates past the @extensible end-hook) still
+    leave an up-to-date JSON on disk. The next AZ startup runs
+    `sweep_orphans()` to mark any leftover pending files as "orphaned".
+    """
     skills = agent.data.get("loaded_skills") or []
     profile = getattr(getattr(agent, "config", None), "profile", None)
     report = {
@@ -83,9 +100,12 @@ def begin_task(agent) -> dict:
         "iterations": 0,
         "llm_calls": [],
         "tool_calls": [],
+        "ended_reason": ENDED_PENDING,
     }
     agent.data[DATA_KEY] = report
     agent.data[PENDING_TOOL_KEY] = {}
+    # Write the initial snapshot so even an immediate cancel leaves evidence.
+    _write_report(report, final=False)
     logger.info(
         f"[task_report] begin {report['task_id']} profile={profile} skills={len(skills)}"
     )
@@ -94,6 +114,98 @@ def begin_task(agent) -> dict:
 
 def get_report(agent):
     return agent.data.get(DATA_KEY)
+
+
+def _compute_totals(report: dict) -> dict:
+    return {
+        "tool_calls": len(report.get("tool_calls") or []),
+        "llm_calls": len(report.get("llm_calls") or []),
+        "input_tokens": sum(c.get("input_tokens", 0) for c in report.get("llm_calls") or []),
+        "output_tokens": sum(c.get("output_tokens", 0) for c in report.get("llm_calls") or []),
+        "cache_read_tokens": sum(c.get("cache_read_tokens", 0) for c in report.get("llm_calls") or []),
+        "cache_creation_tokens": sum(c.get("cache_creation_tokens", 0) for c in report.get("llm_calls") or []),
+    }
+
+
+def _write_report(report: dict, *, final: bool) -> None:
+    """Serialize `report` to its task JSON file. Idempotent — safe to call
+    repeatedly during a run.
+
+    `final=True` means the write is the terminal one from `finish_task` — we
+    compute and store `elapsed_sec` and strip the internal `started_ts`.
+    `final=False` writes an in-progress snapshot; `elapsed_sec` reflects time
+    since start and `ended_reason` stays as whatever the caller set it to
+    (usually "pending").
+    """
+    if not report or not report.get("task_id"):
+        return
+    try:
+        snapshot = dict(report)
+        started_ts = snapshot.get("started_ts")
+        if isinstance(started_ts, (int, float)):
+            snapshot["elapsed_sec"] = round(time.time() - started_ts, 3)
+        snapshot.pop("started_ts", None)
+        snapshot["totals"] = _compute_totals(snapshot)
+        TASKS_DIR.mkdir(parents=True, exist_ok=True)
+        path = TASKS_DIR / f"{snapshot['task_id']}.json"
+        # Atomic-ish write: rename from .tmp so a crash mid-flush doesn't
+        # leave a half-serialized file.
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+        if final:
+            logger.info(
+                f"[task_report] wrote {path} final "
+                f"(tools={snapshot['totals']['tool_calls']} "
+                f"llm={snapshot['totals']['llm_calls']} "
+                f"iter={snapshot.get('iterations', 0)} "
+                f"elapsed={snapshot.get('elapsed_sec', 0)}s)"
+            )
+    except Exception as e:
+        logger.warning(f"[task_report] write failed: {e}")
+
+
+def save_task(agent) -> None:
+    """Idempotent periodic save. Called on message_loop_start and
+    tool_execute_after so that cancel/kill paths still leave a fresh JSON.
+    Does NOT pop from agent.data — finish_task owns that lifecycle step.
+    """
+    r = get_report(agent)
+    if r is None:
+        return
+    _write_report(r, final=False)
+
+
+def sweep_orphans() -> int:
+    """Mark any leftover pending JSONs as orphaned. Called once on AZ startup
+    from an agent_init extension. Any file still reporting
+    `ended_reason == "pending"` at startup means the previous process died
+    mid-run or the task was cancelled (monologue_end never fired).
+
+    Returns the number of files rewritten.
+    """
+    count = 0
+    try:
+        if not TASKS_DIR.exists():
+            return 0
+        for p in TASKS_DIR.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if data.get("ended_reason") == ENDED_PENDING:
+                data["ended_reason"] = ENDED_ORPHANED
+                data.setdefault("ended_at", _now_iso())
+                try:
+                    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    count += 1
+                except Exception as e:
+                    logger.warning(f"[task_report] sweep write failed for {p}: {e}")
+    except Exception as e:
+        logger.warning(f"[task_report] sweep_orphans error: {e}")
+    if count:
+        logger.info(f"[task_report] sweep_orphans: marked {count} file(s) as orphaned")
+    return count
 
 
 def record_iteration(agent, iteration) -> None:
@@ -268,37 +380,22 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
 
 
 def finish_task(agent) -> dict | None:
-    """Finalize report and write to disk. Called from monologue_end.
+    """Finalize report and write to disk. Called from monologue_end on the
+    normal completion path. Marks `ended_reason="completed"`.
 
-    NOTE: monologue_end is skipped on cancel/kill. A fallback via the implicit
-    @extensible hook (_functions/agent/Agent/monologue/end) is left for a
-    follow-up — see issue #1.
+    NOTE: monologue_end does NOT fire on asyncio.CancelledError (kill via UI
+    stop or api_terminate_chat). For those paths, the periodic saves from
+    `save_task()` leave the latest snapshot on disk with
+    `ended_reason="pending"`, and `sweep_orphans()` at next AZ startup
+    promotes them to "orphaned".
     """
     r = get_report(agent)
     if r is None:
         return None
     r["ended_at"] = _now_iso()
-    started_ts = r.pop("started_ts", time.time())
-    r["elapsed_sec"] = round(time.time() - started_ts, 3)
-    r["totals"] = {
-        "tool_calls": len(r["tool_calls"]),
-        "llm_calls": len(r["llm_calls"]),
-        "input_tokens": sum(c["input_tokens"] for c in r["llm_calls"]),
-        "output_tokens": sum(c["output_tokens"] for c in r["llm_calls"]),
-        "cache_read_tokens": sum(c["cache_read_tokens"] for c in r["llm_calls"]),
-        "cache_creation_tokens": sum(c.get("cache_creation_tokens", 0) for c in r["llm_calls"]),
-    }
+    r["ended_reason"] = ENDED_COMPLETED
     try:
-        TASKS_DIR.mkdir(parents=True, exist_ok=True)
-        path = TASKS_DIR / f"{r['task_id']}.json"
-        path.write_text(json.dumps(r, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info(
-            f"[task_report] wrote {path} "
-            f"(tools={r['totals']['tool_calls']} llm={r['totals']['llm_calls']} "
-            f"iter={r['iterations']} elapsed={r['elapsed_sec']}s)"
-        )
-    except Exception as e:
-        logger.warning(f"[task_report] write failed: {e}")
+        _write_report(r, final=True)
     finally:
         agent.data.pop(DATA_KEY, None)
         agent.data.pop(PENDING_TOOL_KEY, None)
