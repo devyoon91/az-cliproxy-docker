@@ -43,7 +43,7 @@ services:
       - ./agent-zero/git-init.sh:/a0/git-init.sh:ro
       - ./agent-zero/extensions/python/agent_init/_90_usage_tracker.py:/a0/extensions/python/agent_init/_90_usage_tracker.py:ro
       # Task post-report system (M1: raw capture) — issue #1
-      - ./agent-zero/lib/task_report.py:/a0/python/helpers/task_report.py:ro
+      - ./agent-zero/lib/task_report.py:/a0/helpers/task_report.py:ro
       - ./agent-zero/extensions/python/monologue_start/_50_task_report_begin.py:/a0/extensions/python/monologue_start/_50_task_report_begin.py:ro
       - ./agent-zero/extensions/python/message_loop_start/_50_task_report_iter.py:/a0/extensions/python/message_loop_start/_50_task_report_iter.py:ro
       - ./agent-zero/extensions/python/tool_execute_before/_50_task_report_tool_start.py:/a0/extensions/python/tool_execute_before/_50_task_report_tool_start.py:ro
