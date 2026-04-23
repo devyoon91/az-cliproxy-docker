@@ -148,9 +148,17 @@ def llm_call(agent, call_data, response) -> None:
     r = get_report(agent)
     if r is None:
         return
+    # Resolve model name as a string.
+    # - response.model is the LiteLLM-normalized string (preferred)
+    # - call_data["model"] is Agent Zero's model *object*, not serializable
     model = None
-    if isinstance(call_data, dict):
-        model = call_data.get("model")
+    if response is not None:
+        model = getattr(response, "model", None)
+    if not isinstance(model, str) and isinstance(call_data, dict):
+        m = call_data.get("model")
+        model = getattr(m, "model_name", None) or getattr(m, "name", None)
+    if not isinstance(model, str):
+        model = None
     usage = getattr(response, "usage", None) if response is not None else None
     input_tokens = 0
     output_tokens = 0
