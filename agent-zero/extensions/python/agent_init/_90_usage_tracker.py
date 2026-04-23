@@ -35,16 +35,29 @@ class UsageLogger(CustomLogger):
             if usage:
                 input_tokens = getattr(usage, "prompt_tokens", 0) or 0
                 output_tokens = getattr(usage, "completion_tokens", 0) or 0
+                # Anthropic cache fields (passed through by LiteLLM)
+                cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                # OpenAI cache field (fallback)
+                details = getattr(usage, "prompt_tokens_details", None)
+                if details is not None:
+                    cache_read += getattr(details, "cached_tokens", 0) or 0
             else:
                 input_tokens = 0
                 output_tokens = 0
+                cache_read = 0
+                cache_creation = 0
 
             if input_tokens == 0 and output_tokens == 0:
                 return
 
-            logger.info(f"[UsageTracker] {model}: in={input_tokens}, out={output_tokens}")
+            logger.info(
+                f"[UsageTracker] {model}: in={input_tokens}, out={output_tokens}, "
+                f"cache_read={cache_read}, cache_creation={cache_creation}"
+            )
 
             # webhook 전송 (fire-and-forget, 실패해도 에이전트에 영향 없음)
+            # 신규 필드(cache_read/creation)는 기존 receiver가 무시해도 호환됨.
             try:
                 requests.post(
                     TELEGRAM_BRIDGE_URL,
@@ -52,6 +65,8 @@ class UsageLogger(CustomLogger):
                         "model": model,
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
+                        "cache_read_tokens": cache_read,
+                        "cache_creation_tokens": cache_creation,
                     },
                     timeout=3,
                 )

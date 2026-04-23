@@ -122,6 +122,28 @@ def tool_end(agent, tool_name: str, response) -> None:
     r["tool_calls"].append(entry)
 
 
+def _extract_cache_tokens(usage) -> tuple[int, int]:
+    """Extract (cache_read, cache_creation) from LiteLLM-normalized usage.
+
+    Supports both formats:
+    - OpenAI: prompt_tokens_details.cached_tokens
+    - Anthropic: cache_read_input_tokens / cache_creation_input_tokens
+      (LiteLLM passes through)
+    """
+    read = 0
+    creation = 0
+    if usage is None:
+        return read, creation
+    # Anthropic fields (passed through by LiteLLM)
+    read += getattr(usage, "cache_read_input_tokens", 0) or 0
+    creation += getattr(usage, "cache_creation_input_tokens", 0) or 0
+    # OpenAI fields
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is not None:
+        read += getattr(details, "cached_tokens", 0) or 0
+    return read, creation
+
+
 def llm_call(agent, call_data, response) -> None:
     r = get_report(agent)
     if r is None:
@@ -132,19 +154,17 @@ def llm_call(agent, call_data, response) -> None:
     usage = getattr(response, "usage", None) if response is not None else None
     input_tokens = 0
     output_tokens = 0
-    cache_read = 0
     if usage is not None:
         input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
-        details = getattr(usage, "prompt_tokens_details", None)
-        if details is not None:
-            cache_read = getattr(details, "cached_tokens", 0) or 0
+    cache_read, cache_creation = _extract_cache_tokens(usage)
     r["llm_calls"].append({
         "at": _now_iso(),
         "model": model,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cache_read_tokens": cache_read,
+        "cache_creation_tokens": cache_creation,
     })
 
 
@@ -167,6 +187,7 @@ def finish_task(agent) -> dict | None:
         "input_tokens": sum(c["input_tokens"] for c in r["llm_calls"]),
         "output_tokens": sum(c["output_tokens"] for c in r["llm_calls"]),
         "cache_read_tokens": sum(c["cache_read_tokens"] for c in r["llm_calls"]),
+        "cache_creation_tokens": sum(c.get("cache_creation_tokens", 0) for c in r["llm_calls"]),
     }
     try:
         TASKS_DIR.mkdir(parents=True, exist_ok=True)
