@@ -152,6 +152,22 @@ def calc_cost(
     )
 
 
+def _normalize_model(model: str) -> str:
+    """Canonicalize model name before aggregating.
+
+    LiteLLM's kwargs["model"] and the stream-probe POST sometimes carry the
+    provider prefix (`anthropic/claude-sonnet-4-6`) and sometimes don't
+    (`claude-sonnet-4-6`). Without this the `by_model` dict splits one model
+    into two rows with mismatched cache/cost stats. Mirrors the same helper
+    now living in agent-zero/lib/task_report.py (issue #24 Wave 2).
+    """
+    if not isinstance(model, str) or not model:
+        return model
+    if model.startswith("anthropic/"):
+        return model.split("/", 1)[1]
+    return model
+
+
 def track_usage(
     model: str,
     input_tokens: int,
@@ -161,6 +177,8 @@ def track_usage(
 ):
     """사용량 누적 (cache tokens 포함)"""
     global usage_today
+    # Collapse provider-prefixed and bare forms so /today by_model stays unified.
+    model = _normalize_model(model)
     today = _kst_now().strftime("%Y-%m-%d")
 
     # 날짜가 바뀌면 리셋
