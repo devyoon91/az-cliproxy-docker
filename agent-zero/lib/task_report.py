@@ -17,8 +17,17 @@ import json
 import logging
 import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
+
+# ContextVar that the `_91_chunk_usage_probe` agent_init extension writes to
+# at stream end with real LiteLLM-assembled usage (incl. Anthropic cache
+# fields). Read here in `llm_call()` to override approximate tokens with
+# real values when available. Lives in helpers/task_report.py so both the
+# agent_init extension and chat_model_call_after extension can share it
+# via `from helpers.task_report import last_stream_usage`.
+last_stream_usage: ContextVar = ContextVar("az_last_stream_usage", default=None)
 
 try:
     # Agent Zero ships this helper; same function it uses internally in
@@ -211,9 +220,31 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
     if not isinstance(model, str):
         model = None
 
-    # Prefer real usage if it ever becomes available (future-proof).
+    # Priority:
+    # 1) ContextVar from stream-usage-capture extension (real + cache fields)
+    # 2) response.usage if a future AZ version passes a ModelResponse
+    # 3) approximate_tokens fallback
+    stream_usage = None
+    try:
+        stream_usage = last_stream_usage.get()
+    except Exception:
+        stream_usage = None
+
     usage = getattr(response, "usage", None) if response is not None else None
-    if usage is not None:
+
+    if stream_usage:
+        input_tokens = int(stream_usage.get("prompt_tokens", 0) or 0)
+        output_tokens = int(stream_usage.get("completion_tokens", 0) or 0)
+        cache_read = int(stream_usage.get("cache_read_input_tokens", 0) or 0)
+        cache_creation = int(stream_usage.get("cache_creation_input_tokens", 0) or 0)
+        approximate = False
+        # Consume so the next call in the same monologue does not re-read
+        # stale values. Stream-capture writes fresh values each call.
+        try:
+            last_stream_usage.set(None)
+        except Exception:
+            pass
+    elif usage is not None:
         input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
         cache_read, cache_creation = _extract_cache_tokens(usage)
