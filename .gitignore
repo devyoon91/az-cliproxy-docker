@@ -24,3 +24,7 @@ __pycache__/
 # Local Docker Compose overrides (personal mounts, test-only)
 docker-compose.override.yml
 docker-compose.override.yaml
+
+# M5-A: telegram-bridge persistent runtime data (budget settings, alert
+# cooldown, future pricing snapshots). Per-deploy state — never commit.
+telegram-bridge/data/
