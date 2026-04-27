@@ -954,7 +954,7 @@ def _load_task_jsons() -> list[dict]:
 
 
 def _aggregate(tasks: list[dict]) -> dict:
-    """Sum totals across a list of tasks, also grouping by model and status."""
+    """Sum totals across a list of tasks, also grouping by model, profile, and status."""
     agg = {
         "tasks": len(tasks),
         "completed": 0,
@@ -968,6 +968,7 @@ def _aggregate(tasks: list[dict]) -> dict:
         "cache_creation_tokens": 0,
         "cost_usd": 0.0,
         "by_model": {},
+        "by_profile": {},
     }
     for t in tasks:
         reason = t.get("ended_reason", "pending")
@@ -978,6 +979,26 @@ def _aggregate(tasks: list[dict]) -> dict:
                   "cache_read_tokens", "cache_creation_tokens"):
             agg[k] += int(totals.get(k, 0) or 0)
         agg["cost_usd"] += float(totals.get("cost_usd", 0.0) or 0.0)
+
+        # Profile bucket — one task can only have one profile, so we aggregate
+        # the task's own totals (not per-call). Includes tool_calls so the
+        # breakdown can surface which profile is doing the most work, not
+        # just spending the most money.
+        prof = t.get("profile") or "default"
+        pbucket = agg["by_profile"].setdefault(prof, {
+            "tasks": 0, "llm_calls": 0, "tool_calls": 0,
+            "input": 0, "output": 0,
+            "cache_read": 0, "cache_create": 0, "cost": 0.0,
+        })
+        pbucket["tasks"] += 1
+        pbucket["llm_calls"] += int(totals.get("llm_calls", 0) or 0)
+        pbucket["tool_calls"] += int(totals.get("tool_calls", 0) or 0)
+        pbucket["input"] += int(totals.get("input_tokens", 0) or 0)
+        pbucket["output"] += int(totals.get("output_tokens", 0) or 0)
+        pbucket["cache_read"] += int(totals.get("cache_read_tokens", 0) or 0)
+        pbucket["cache_create"] += int(totals.get("cache_creation_tokens", 0) or 0)
+        pbucket["cost"] += float(totals.get("cost_usd", 0.0) or 0.0)
+
         for c in t.get("llm_calls") or []:
             m = c.get("model") or "unknown"
             bucket = agg["by_model"].setdefault(m, {
@@ -992,6 +1013,170 @@ def _aggregate(tasks: list[dict]) -> dict:
             bucket["cost"] += float(c.get("cost_usd", 0.0) or 0.0)
     agg["cost_usd"] = round(agg["cost_usd"], 6)
     return agg
+
+
+def _is_anthropic_model(model: str) -> bool:
+    """Anthropic models get prompt caching; others (OpenAI, etc.) don't —
+    so cache hit-ratio and `cache_saved_usd` should only count Anthropic
+    rows. Match on "claude" substring plus the explicit anthropic/ prefix,
+    which is broad enough to catch Sonnet/Haiku/Opus variants we use now
+    without hand-maintaining a whitelist."""
+    if not isinstance(model, str):
+        return False
+    m = model.lower()
+    return m.startswith("anthropic/") or "claude" in m
+
+
+def _cache_efficiency(agg: dict) -> dict | None:
+    """Compute Anthropic prompt-cache efficiency from an aggregate.
+
+    Returns `None` when there's no Anthropic traffic in the window —
+    the caller should skip rendering the cache line entirely in that case.
+
+    Fields:
+      anthropic_calls      — number of llm_calls against Anthropic models
+      input_tokens         — sum of prompt_tokens on Anthropic calls
+      cache_read_tokens    — sum of cache_read on Anthropic calls
+      cache_creation       — sum of cache_creation on Anthropic calls
+      hit_ratio            — cache_read / (input + cache_read)
+                             (0..1; None if denominator is 0)
+      saved_usd            — Σ cache_read × (input_rate − cache_read_rate)
+                             per model, using the live LiteLLM price table
+
+    Ratio interpretation (from issue #22):
+      ≥0.70  ✅ healthy cache reuse
+      0.40..0.70  ⚠️ prompt likely drifting between calls
+      <0.40  🚨 cache busted (system prompt / tool schema changing)
+    """
+    anthropic_calls = 0
+    total_input = 0
+    total_cache_read = 0
+    total_cache_create = 0
+    saved = 0.0
+    for model, b in (agg.get("by_model") or {}).items():
+        if not _is_anthropic_model(model):
+            continue
+        anthropic_calls += b["calls"]
+        total_input += b["input"]
+        total_cache_read += b["cache_read"]
+        total_cache_create += b["cache_create"]
+        if b["cache_read"] > 0:
+            info = _model_info(model)
+            in_rate = info.get("input_cost_per_token", 0.000003)
+            read_rate = info.get("cache_read_input_token_cost", in_rate * 0.10)
+            # What we WOULD have paid at full input rate minus what we DID
+            # pay at cache-read rate = the caching savings for this model.
+            saved += b["cache_read"] * max(in_rate - read_rate, 0.0)
+    if anthropic_calls == 0:
+        return None
+    denom = total_input + total_cache_read
+    hit_ratio = (total_cache_read / denom) if denom > 0 else None
+    return {
+        "anthropic_calls": anthropic_calls,
+        "input_tokens": total_input,
+        "cache_read_tokens": total_cache_read,
+        "cache_creation_tokens": total_cache_create,
+        "hit_ratio": hit_ratio,
+        "saved_usd": saved,
+    }
+
+
+def _format_cache_line(ce: dict) -> str:
+    """One-line cache efficiency summary, Telegram-friendly.
+
+    Shape: `🧠 캐시: 78% ✅ (117k/150k read · 절감 $2.81)`
+    """
+    ratio = ce.get("hit_ratio")
+    if ratio is None:
+        emoji = "❔"
+        ratio_str = "N/A"
+    else:
+        if ratio >= 0.70:
+            emoji = "✅"
+        elif ratio >= 0.40:
+            emoji = "⚠️"
+        else:
+            emoji = "🚨"
+        ratio_str = f"{ratio * 100:.0f}%"
+    read_k = ce["cache_read_tokens"] / 1000.0
+    denom_k = (ce["input_tokens"] + ce["cache_read_tokens"]) / 1000.0
+    return (
+        f"🧠 캐시: {ratio_str} {emoji} "
+        f"({read_k:.0f}k/{denom_k:.0f}k read · 절감 ${ce['saved_usd']:.4f})"
+    )
+
+
+def _parse_by_flag(args) -> str | None:
+    """Parse `by:model` / `by:profile` from Telegram command args.
+
+    Supports:
+      /today                → None        (default compact view)
+      /today by:model       → "model"
+      /today by:profile     → "profile"
+      /today model          → "model"     (shorthand, same as by:model)
+      /today profile        → "profile"
+
+    Unknown keys return None so the command gracefully falls back to the
+    default view instead of erroring.
+    """
+    if not args:
+        return None
+    a = args[0].strip().lower()
+    if a in ("by:model", "model", "by:models", "models"):
+        return "model"
+    if a in ("by:profile", "profile", "by:profiles", "profiles"):
+        return "profile"
+    return None
+
+
+def _format_model_breakdown(agg: dict, *, title: str = "모델별") -> list[str]:
+    """Detailed model table — used by `/today by:model` and `/week by:model`.
+
+    Includes zero-cost rows (call count only) per issue #20 acceptance.
+    """
+    by_model = agg.get("by_model") or {}
+    if not by_model:
+        return [f"🤖 {title}: (데이터 없음)"]
+    lines = [f"🤖 {title}:"]
+    # Sort by cost desc, secondary by call count so free models don't jumble.
+    for model, b in sorted(
+        by_model.items(),
+        key=lambda kv: (kv[1]["cost"], kv[1]["calls"]),
+        reverse=True,
+    ):
+        cache = (
+            f" | cache r:{b['cache_read']:,} c:{b['cache_create']:,}"
+            if (b["cache_read"] or b["cache_create"]) else ""
+        )
+        lines.append(
+            f"  • {model}: {b['calls']}× "
+            f"in {b['input']:,} out {b['output']:,}{cache} → ${b['cost']:.4f}"
+        )
+    return lines
+
+
+def _format_profile_breakdown(agg: dict, *, title: str = "프로파일별") -> list[str]:
+    """Detailed profile table — used by `/today by:profile` / `/week by:profile`.
+
+    Profile-level aggregates task counts, tools, and LLM calls in addition
+    to cost — profiles differ by agent behavior, so tool volume is often
+    the more informative signal than raw cost.
+    """
+    by_profile = agg.get("by_profile") or {}
+    if not by_profile:
+        return [f"👤 {title}: (데이터 없음)"]
+    lines = [f"👤 {title}:"]
+    for prof, b in sorted(
+        by_profile.items(),
+        key=lambda kv: (kv[1]["cost"], kv[1]["tasks"]),
+        reverse=True,
+    ):
+        lines.append(
+            f"  • {prof}: {b['tasks']}태스크 · "
+            f"LLM {b['llm_calls']} · 도구 {b['tool_calls']} "
+            f"→ ${b['cost']:.4f}"
+        )
+    return lines
 
 
 def _filter_date_range(tasks: list[dict], start, end) -> list[dict]:
@@ -1094,7 +1279,13 @@ def _format_agg_block(title: str, agg: dict) -> list[str]:
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Today's task aggregate from on-disk JSONs (KST boundary)."""
+    """Today's task aggregate from on-disk JSONs (KST boundary).
+
+    Supports an optional breakdown flag (issue #20):
+      /today              — default summary + compact model list
+      /today by:model     — detailed per-model table (replaces compact list)
+      /today by:profile   — per-profile table
+    """
     if update.effective_chat.id != CHAT_ID:
         return
     tasks = _load_task_jsons()
@@ -1110,24 +1301,51 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if banner:
         lines.insert(1, banner)
 
-    by_model = agg.get("by_model", {})
-    if by_model:
-        lines.append("\n🤖 모델별:")
-        for model, b in sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True):
-            cache = (
-                f" | cache r:{b['cache_read']:,} c:{b['cache_create']:,}"
-                if (b["cache_read"] or b["cache_create"]) else ""
-            )
-            lines.append(
-                f"  • {model}: {b['calls']}× "
-                f"in {b['input']:,} out {b['output']:,}{cache} → ${b['cost']:.4f}"
-            )
+    # Cache efficiency line — Anthropic-only, suppressed when no anthropic
+    # traffic in window (issue #22).
+    ce = _cache_efficiency(agg)
+    if ce:
+        lines.append(_format_cache_line(ce))
+
+    # Breakdown mode — `/today by:model` or `by:profile` replaces the default
+    # compact model list. Default stays as today's pre-Wave-3 format so the
+    # unflagged command remains familiar.
+    mode = _parse_by_flag(context.args)
+    if mode == "model":
+        lines.append("")
+        lines.extend(_format_model_breakdown(agg, title="모델별 (상세)"))
+    elif mode == "profile":
+        lines.append("")
+        lines.extend(_format_profile_breakdown(agg))
+    else:
+        by_model = agg.get("by_model", {})
+        if by_model:
+            lines.append("\n🤖 모델별:")
+            for model, b in sorted(
+                by_model.items(),
+                key=lambda kv: (kv[1]["cost"], kv[1]["calls"]),
+                reverse=True,
+            ):
+                cache = (
+                    f" | cache r:{b['cache_read']:,} c:{b['cache_create']:,}"
+                    if (b["cache_read"] or b["cache_create"]) else ""
+                )
+                lines.append(
+                    f"  • {model}: {b['calls']}× "
+                    f"in {b['input']:,} out {b['output']:,}{cache} → ${b['cost']:.4f}"
+                )
 
     await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Last 7 days: daily breakdown + grand totals (KST boundary)."""
+    """Last 7 days: daily breakdown + grand totals (KST boundary).
+
+    Supports an optional breakdown flag (issue #20):
+      /week              — default daily rows + compact weekly model list
+      /week by:model     — detailed per-model table for the week
+      /week by:profile   — per-profile table for the week
+    """
     if update.effective_chat.id != CHAT_ID:
         return
     all_tasks = _load_task_jsons()
@@ -1166,11 +1384,29 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     grand = _aggregate(window)
     lines.append("")
     lines.extend(_format_agg_block("주간 합계", grand))
-    by_model = grand.get("by_model", {})
-    if by_model:
-        lines.append("\n🤖 모델별 (주간):")
-        for model, b in sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True):
-            lines.append(f"  • {model}: {b['calls']}× → ${b['cost']:.4f}")
+
+    # Cache efficiency for the full week (Anthropic only).
+    ce = _cache_efficiency(grand)
+    if ce:
+        lines.append(_format_cache_line(ce))
+
+    mode = _parse_by_flag(context.args)
+    if mode == "model":
+        lines.append("")
+        lines.extend(_format_model_breakdown(grand, title="모델별 (주간 상세)"))
+    elif mode == "profile":
+        lines.append("")
+        lines.extend(_format_profile_breakdown(grand, title="프로파일별 (주간)"))
+    else:
+        by_model = grand.get("by_model", {})
+        if by_model:
+            lines.append("\n🤖 모델별 (주간):")
+            for model, b in sorted(
+                by_model.items(),
+                key=lambda kv: (kv[1]["cost"], kv[1]["calls"]),
+                reverse=True,
+            ):
+                lines.append(f"  • {model}: {b['calls']}× → ${b['cost']:.4f}")
 
     await update.message.reply_text("\n".join(lines))
 
