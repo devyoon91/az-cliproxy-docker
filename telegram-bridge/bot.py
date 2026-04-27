@@ -1285,8 +1285,18 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
       /today              — default summary + compact model list
       /today by:model     — detailed per-model table (replaces compact list)
       /today by:profile   — per-profile table
+
+    NOTE on `effective_message`: python-telegram-bot's `CommandHandler` fires
+    on BOTH new messages and edits (edits go through `update.edited_message`,
+    not `update.message`). Reaching for `update.message.reply_text` directly
+    crashes with NoneType when the user edits a previous /today (e.g. "/today"
+    → "/today by:model" to test variants). `effective_message` resolves to
+    whichever variant actually carries the command text.
     """
     if update.effective_chat.id != CHAT_ID:
+        return
+    msg = update.effective_message
+    if msg is None:
         return
     tasks = _load_task_jsons()
     today_start = _kst_now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1335,7 +1345,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"in {b['input']:,} out {b['output']:,}{cache} → ${b['cost']:.4f}"
                 )
 
-    await update.message.reply_text("\n".join(lines))
+    await msg.reply_text("\n".join(lines))
 
 
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1345,8 +1355,13 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
       /week              — default daily rows + compact weekly model list
       /week by:model     — detailed per-model table for the week
       /week by:profile   — per-profile table for the week
+
+    See cmd_today for the `effective_message` rationale (edit-aware).
     """
     if update.effective_chat.id != CHAT_ID:
+        return
+    msg = update.effective_message
+    if msg is None:
         return
     all_tasks = _load_task_jsons()
     today_start = _kst_now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1408,7 +1423,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ):
                 lines.append(f"  • {model}: {b['calls']}× → ${b['cost']:.4f}")
 
-    await update.message.reply_text("\n".join(lines))
+    await msg.reply_text("\n".join(lines))
 
 
 async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
