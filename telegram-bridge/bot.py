@@ -1484,6 +1484,354 @@ async def daily_pricing_snapshot() -> None:
             await asyncio.sleep(300)  # back off 5 min on unexpected errors
 
 
+# ── Web dashboard (M5-E · issue #23) ──
+# Serves an HTML page + JSON stats API at /dashboard and /api/stats on the
+# same aiohttp server already running for /notify, /track, /usage.
+#
+# Auth: shared token via env var DASHBOARD_TOKEN. Empty/unset disables both
+# endpoints (returns 404 to keep the surface area small). The user can pass
+# the token as ?token=... query param OR X-Dashboard-Token header — query
+# is convenient for `curl` and bookmarks; header is recommended for any
+# real deployment since query strings end up in proxy access logs.
+#
+# Per #23: client-side rendering only — server returns static HTML +
+# JSON. Chart.js loads from CDN so there's no build step.
+DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "").strip()
+
+
+def _check_dashboard_auth(request) -> bool:
+    """Return True if the request carries the configured token. When
+    DASHBOARD_TOKEN is empty/unset both endpoints are disabled (handlers
+    return 404), so this only runs when a token IS configured."""
+    if not DASHBOARD_TOKEN:
+        return False
+    presented = request.query.get("token") or request.headers.get("X-Dashboard-Token")
+    if not presented:
+        return False
+    # Constant-time compare so timing doesn't leak the token byte-by-byte.
+    import hmac
+    return hmac.compare_digest(presented, DASHBOARD_TOKEN)
+
+
+def _build_stats(range_days: int = 30) -> dict:
+    """Aggregate the read-only task JSONs into the shape the dashboard JS
+    expects. Single source of truth — same `_aggregate` pipeline as
+    /today /week, so dashboard numbers track Telegram numbers exactly.
+
+    Shape:
+      {
+        "now": "...",                 # KST ISO timestamp
+        "range_days": 30,
+        "totals": {tasks, llm_calls, tool_calls, cost_usd, ...},
+        "daily":   [{date: "YYYY-MM-DD", tasks, cost, llm_calls}],
+        "by_model_7d": [{model, calls, cost, input, output, cache_read,
+                         cache_create}],
+        "scatter":  [{task_id, elapsed_sec, cost_usd, profile, ended_reason}],
+      }
+    """
+    now = _kst_now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    range_start = today_start - timedelta(days=range_days - 1)
+    range_end = today_start + timedelta(days=1)
+
+    all_tasks = _load_task_jsons()
+    window_tasks = _filter_date_range(all_tasks, range_start, range_end)
+
+    daily = []
+    for i in range(range_days):
+        day_start = range_start + timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
+        day_tasks = _filter_date_range(window_tasks, day_start, day_end)
+        agg = _aggregate(day_tasks)
+        daily.append({
+            "date": day_start.strftime("%Y-%m-%d"),
+            "tasks": agg["tasks"],
+            "cost": round(agg["cost_usd"], 6),
+            "llm_calls": agg["llm_calls"],
+        })
+
+    # Per-model bucket over the last 7 days (separate window from the
+    # 30-day daily series — short window catches recent shift in mix).
+    week_start = today_start - timedelta(days=6)
+    week_tasks = _filter_date_range(all_tasks, week_start, range_end)
+    week_agg = _aggregate(week_tasks)
+    by_model = []
+    for model, b in week_agg.get("by_model", {}).items():
+        by_model.append({
+            "model": model,
+            "calls": b["calls"],
+            "cost": round(b["cost"], 6),
+            "input": b["input"],
+            "output": b["output"],
+            "cache_read": b["cache_read"],
+            "cache_create": b["cache_create"],
+        })
+    by_model.sort(key=lambda r: r["cost"], reverse=True)
+
+    # Scatter: one point per task in the range. Useful to spot tasks that
+    # are slow without being expensive (probably stuck) or expensive without
+    # being slow (cache miss / context bloat).
+    scatter = []
+    for t in window_tasks:
+        totals = t.get("totals") or {}
+        scatter.append({
+            "task_id": t.get("task_id"),
+            "elapsed_sec": t.get("elapsed_sec") or 0,
+            "cost_usd": round(float(totals.get("cost_usd", 0.0) or 0.0), 6),
+            "profile": t.get("profile") or "default",
+            "ended_reason": t.get("ended_reason") or "unknown",
+        })
+
+    full_agg = _aggregate(window_tasks)
+    return {
+        "now": now.isoformat(),
+        "range_days": range_days,
+        "totals": {
+            "tasks": full_agg["tasks"],
+            "llm_calls": full_agg["llm_calls"],
+            "tool_calls": full_agg["tool_calls"],
+            "input_tokens": full_agg["input_tokens"],
+            "output_tokens": full_agg["output_tokens"],
+            "cache_read_tokens": full_agg["cache_read_tokens"],
+            "cache_creation_tokens": full_agg["cache_creation_tokens"],
+            "cost_usd": round(full_agg["cost_usd"], 6),
+        },
+        "daily": daily,
+        "by_model_7d": by_model,
+        "scatter": scatter,
+    }
+
+
+async def stats_api_handler(request):
+    """GET /api/stats?range=30d&token=... — JSON used by the dashboard JS
+    to populate charts. Also useful directly for a curl-based pipe to
+    elsewhere (Grafana, jq) once the user pulls the token out of band."""
+    if not DASHBOARD_TOKEN:
+        return web.Response(status=404, text="dashboard disabled")
+    if not _check_dashboard_auth(request):
+        return web.json_response({"error": "unauthorized"}, status=401)
+    raw_range = (request.query.get("range") or "30d").lower().strip()
+    try:
+        # Accept "30d", "30", "7d" — strip trailing 'd' if present.
+        n = int(raw_range[:-1] if raw_range.endswith("d") else raw_range)
+    except ValueError:
+        n = 30
+    n = max(1, min(n, 90))  # cap so a malformed query can't OOM the bridge
+    payload = _build_stats(range_days=n)
+    return web.json_response(payload)
+
+
+# Inline HTML template. Kept in-file so the bridge has no extra static-asset
+# story — single bot.py + Dockerfile is enough to deploy. Chart.js comes
+# from CDN per #23 (no build pipeline). KEEP this template minimal —
+# server-side rendering is intentionally nil.
+DASHBOARD_HTML = """<!doctype html>
+<html lang=\"ko\">
+<head>
+  <meta charset=\"utf-8\">
+  <title>AZ Cost Dashboard</title>
+  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+  <script src=\"https://cdn.jsdelivr.net/npm/chart.js@4\"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;
+      margin: 0; padding: 1.5rem;
+      background: #0f1115; color: #e8e8ec;
+    }
+    h1 { margin: 0 0 .25rem 0; font-size: 1.4rem; }
+    .sub { color: #9aa0aa; font-size: .85rem; margin-bottom: 1.5rem; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: 1fr; }
+    @media (min-width: 900px) {
+      .grid { grid-template-columns: 2fr 1fr; }
+      .span-2 { grid-column: span 2; }
+    }
+    .card {
+      background: #181b22; border: 1px solid #262a33; border-radius: 10px;
+      padding: 1rem; min-height: 220px;
+    }
+    .card h2 { margin: 0 0 .75rem 0; font-size: .95rem; color: #c8ccd6; font-weight: 500; }
+    .totals { display: grid; gap: .5rem .75rem; grid-template-columns: 1fr 1fr; font-size: .85rem; }
+    .totals .v { color: #8cc; font-variant-numeric: tabular-nums; }
+    .err { color: #f88; padding: 1rem; }
+    canvas { max-height: 320px; }
+  </style>
+</head>
+<body>
+  <h1>📊 AZ Cost Dashboard</h1>
+  <div class=\"sub\" id=\"meta\">로딩…</div>
+  <div id=\"err\" class=\"err\" hidden></div>
+  <div class=\"grid\">
+    <div class=\"card\"><h2>일별 비용 (최근 30일)</h2><canvas id=\"daily\"></canvas></div>
+    <div class=\"card\"><h2>모델별 비용 (최근 7일)</h2><canvas id=\"by_model\"></canvas></div>
+    <div class=\"card span-2\"><h2>태스크: 소요시간 vs 비용</h2><canvas id=\"scatter\"></canvas></div>
+    <div class=\"card span-2\">
+      <h2>합계 (윈도우 전체)</h2>
+      <div class=\"totals\" id=\"totals\"></div>
+    </div>
+  </div>
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  const token = params.get(\"token\") || \"\";
+  if (!token) {
+    const el = document.getElementById(\"err\");
+    el.hidden = false;
+    el.textContent = \"⚠️ ?token=... 쿼리 파라미터를 붙여 다시 접속하세요.\";
+    return;
+  }
+  const range = params.get(\"range\") || \"30d\";
+
+  fetch(\"/api/stats?range=\" + encodeURIComponent(range) + \"&token=\" + encodeURIComponent(token))
+    .then(r => r.ok ? r.json() : Promise.reject(\"HTTP \" + r.status))
+    .then(render)
+    .catch(e => {
+      const el = document.getElementById(\"err\");
+      el.hidden = false;
+      el.textContent = \"❌ 데이터 로드 실패: \" + e;
+    });
+
+  function fmtUsd(v) { return \"$\" + (v || 0).toFixed(4); }
+  function k(n) { return n.toLocaleString(); }
+
+  function render(d) {
+    document.getElementById(\"meta\").textContent =
+      \"기간: \" + d.range_days + \"d  ·  업데이트: \" + d.now;
+
+    // Daily bars
+    new Chart(document.getElementById(\"daily\"), {
+      type: \"bar\",
+      data: {
+        labels: d.daily.map(x => x.date.slice(5)),
+        datasets: [{
+          label: \"비용 ($)\",
+          data: d.daily.map(x => x.cost),
+          backgroundColor: \"#6cb2eb\",
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } },
+      },
+    });
+
+    // By-model pie
+    const palette = [
+      \"#6cb2eb\", \"#a78bfa\", \"#34d399\", \"#fbbf24\",
+      \"#f87171\", \"#fb923c\", \"#22d3ee\", \"#94a3b8\",
+    ];
+    new Chart(document.getElementById(\"by_model\"), {
+      type: \"doughnut\",
+      data: {
+        labels: d.by_model_7d.map(x => x.model),
+        datasets: [{
+          data: d.by_model_7d.map(x => x.cost),
+          backgroundColor: d.by_model_7d.map((_, i) => palette[i % palette.length]),
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: \"bottom\", labels: { color: \"#c8ccd6\" } },
+          tooltip: {
+            callbacks: {
+              label: ctx => ctx.label + \": \" + fmtUsd(ctx.parsed),
+            },
+          },
+        },
+      },
+    });
+
+    // Scatter — color per profile
+    const profiles = [...new Set(d.scatter.map(p => p.profile))];
+    const profColor = Object.fromEntries(profiles.map((p, i) => [p, palette[i % palette.length]]));
+    new Chart(document.getElementById(\"scatter\"), {
+      type: \"scatter\",
+      data: {
+        datasets: profiles.map(p => ({
+          label: p,
+          data: d.scatter
+            .filter(s => s.profile === p)
+            .map(s => ({ x: s.elapsed_sec, y: s.cost_usd, task_id: s.task_id })),
+          backgroundColor: profColor[p],
+        })),
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          x: { title: { display: true, text: \"소요 (초)\" } },
+          y: { title: { display: true, text: \"비용 ($)\" } },
+        },
+        plugins: {
+          legend: { position: \"bottom\", labels: { color: \"#c8ccd6\" } },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const r = ctx.raw;
+                return r.task_id + \"  \" + r.x.toFixed(1) + \"s  \" + fmtUsd(r.y);
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // Totals grid
+    const t = d.totals;
+    const rows = [
+      [\"태스크\", k(t.tasks)],
+      [\"비용\", fmtUsd(t.cost_usd)],
+      [\"LLM 호출\", k(t.llm_calls)],
+      [\"도구 호출\", k(t.tool_calls)],
+      [\"입력 토큰\", k(t.input_tokens)],
+      [\"출력 토큰\", k(t.output_tokens)],
+      [\"캐시 읽기\", k(t.cache_read_tokens)],
+      [\"캐시 생성\", k(t.cache_creation_tokens)],
+    ];
+    document.getElementById(\"totals\").innerHTML = rows
+      .map(([l, v]) => \"<div>\" + l + \"</div><div class='v'>\" + v + \"</div>\")
+      .join(\"\");
+  }
+})();
+</script>
+</body>
+</html>
+"""
+
+
+async def dashboard_handler(request):
+    """GET /dashboard?token=... — static HTML, JS does the fetch.
+
+    Returns 404 when DASHBOARD_TOKEN is unset (no advertising the endpoint
+    exists). Returns 401 when token is missing/wrong (after which the page
+    JS shows the "add ?token=..." hint).
+    """
+    if not DASHBOARD_TOKEN:
+        return web.Response(status=404, text="dashboard disabled")
+    if not _check_dashboard_auth(request):
+        # Distinct from /api/stats — the HTML itself loads even on a bad
+        # token so the user sees an in-page hint instead of a bare 401
+        # body. The fetch then fails with 401 and the JS surfaces the
+        # error inline.
+        if not request.query.get("token"):
+            return web.Response(
+                status=401,
+                content_type="text/html",
+                charset="utf-8",
+                text=(
+                    "<h1>🔒 unauthorized</h1>"
+                    "<p>?token=... 쿼리 파라미터를 붙여 다시 접속하세요.</p>"
+                ),
+            )
+    return web.Response(
+        status=200,
+        content_type="text/html",
+                charset="utf-8",
+        text=DASHBOARD_HTML,
+    )
+
+
 def _load_task_jsons() -> list[dict]:
     """Read every task JSON from the mounted AZ logs dir.
 
@@ -2399,11 +2747,20 @@ async def run_webhook_server():
     app.router.add_post("/notify", webhook_handler)
     app.router.add_post("/track", usage_track_handler)
     app.router.add_get("/usage", usage_get_handler)
+    # M5-E: web dashboard (issue #23). Both routes 404 when DASHBOARD_TOKEN
+    # is unset, so registering them is harmless when disabled.
+    app.router.add_get("/api/stats", stats_api_handler)
+    app.router.add_get("/dashboard", dashboard_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8443)
     await site.start()
-    logger.info("Webhook server started on :8443 (/notify, /track, /usage)")
+    routes_msg = "/notify, /track, /usage"
+    if DASHBOARD_TOKEN:
+        routes_msg += ", /dashboard, /api/stats (token-protected)"
+    else:
+        routes_msg += " (dashboard disabled — set DASHBOARD_TOKEN to enable)"
+    logger.info(f"Webhook server started on :8443 ({routes_msg})")
 
 
 # ── 일일 사용량 리포트 스케줄러 ──

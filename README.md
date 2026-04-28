@@ -112,7 +112,27 @@ curl http://localhost:8317/v1/models
 | CLIProxy | 8317 | OpenAI-compatible API |
 | CLIProxy | 8085 | Management UI |
 | CLIProxy | 54545 | OAuth callback |
-| Telegram Bridge | 8443 | 알림/추적 Webhook |
+| Telegram Bridge | 8443 | 알림/추적 Webhook · /dashboard (선택) |
+
+### Web Dashboard (선택)
+
+`telegram-bridge` 의 8443 포트에서 비용/사용량 차트 페이지를 제공합니다 (issue #23, M5-E).
+
+**활성화**: `.env` 에 `DASHBOARD_TOKEN=...` 추가 후 컨테이너 재기동.
+빈 값/미설정 시 `/dashboard` 와 `/api/stats` 는 404 로 차단됩니다.
+
+**접속**:
+```
+http://localhost:8443/dashboard?token=<TOKEN>
+curl "http://localhost:8443/api/stats?range=30d&token=<TOKEN>"
+curl -H "X-Dashboard-Token: <TOKEN>" http://localhost:8443/api/stats
+```
+
+도커 호스트 외부에서 접근하려면 `docker-compose.yml` 의 `ports:` 매핑 또는
+SSH 포트포워딩(`ssh -L 8443:localhost:8443 <host>`)을 사용하세요.
+
+뷰: 일별 비용 (30일), 모델별 비용 (7일 도넛), 태스크 소요 vs 비용
+scatter (프로파일별 색상), 윈도우 합계.
 
 ## Documentation
 
