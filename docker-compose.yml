@@ -78,6 +78,9 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - AZ_API_URL=http://agent-zero:80
+      # M5-E: web dashboard token (issue #23). Empty/unset disables /dashboard
+      # and /api/stats. Set to any non-empty string to enable.
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
     volumes:
       - ./docs:/app/docs:ro
       - ./GUIDE.md:/app/GUIDE.md:ro
