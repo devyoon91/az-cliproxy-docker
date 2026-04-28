@@ -1715,8 +1715,29 @@ DASHBOARD_HTML = """<!doctype html>
       margin: 0; padding: 1.5rem;
       background: #0f1115; color: #e8e8ec;
     }
+    .header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 1rem; flex-wrap: wrap; margin-bottom: .5rem;
+    }
     h1 { margin: 0 0 .25rem 0; font-size: 1.4rem; }
-    .sub { color: #9aa0aa; font-size: .85rem; margin-bottom: 1.5rem; }
+    .toolbar {
+      display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+    }
+    .toolbar select, .toolbar button {
+      background: #1c1f27; color: #e8e8ec; border: 1px solid #2c313c;
+      border-radius: 6px; padding: .35rem .65rem; font-size: .85rem;
+      cursor: pointer; font-family: inherit;
+    }
+    .toolbar select:hover, .toolbar button:hover { border-color: #3a4150; }
+    .toolbar .label { font-size: .75rem; color: #9aa0aa; margin-right: .25rem; }
+    .toolbar button.refresh { padding: .35rem .55rem; }
+    .toolbar button.refresh.spinning span { animation: spin 1s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .sub {
+      color: #9aa0aa; font-size: .8rem; margin-bottom: 1.25rem;
+      display: flex; gap: 1rem; flex-wrap: wrap;
+    }
+    .sub .next { color: #8cc; font-variant-numeric: tabular-nums; }
     .grid { display: grid; gap: 1rem; grid-template-columns: 1fr; }
     @media (min-width: 900px) {
       .grid { grid-template-columns: 2fr 1fr; }
@@ -1729,16 +1750,45 @@ DASHBOARD_HTML = """<!doctype html>
     .card h2 { margin: 0 0 .75rem 0; font-size: .95rem; color: #c8ccd6; font-weight: 500; }
     .totals { display: grid; gap: .5rem .75rem; grid-template-columns: 1fr 1fr; font-size: .85rem; }
     .totals .v { color: #8cc; font-variant-numeric: tabular-nums; }
-    .err { color: #f88; padding: 1rem; }
+    .err { color: #f88; padding: .5rem 1rem; }
     canvas { max-height: 320px; }
   </style>
 </head>
 <body>
-  <h1>📊 AZ Cost Dashboard</h1>
-  <div class=\"sub\" id=\"meta\">로딩…</div>
+  <div class=\"header\">
+    <div>
+      <h1>📊 AZ Cost Dashboard</h1>
+    </div>
+    <div class=\"toolbar\">
+      <span class=\"label\">기간</span>
+      <select id=\"range\">
+        <option value=\"1d\">1d</option>
+        <option value=\"7d\">7d</option>
+        <option value=\"14d\">14d</option>
+        <option value=\"30d\" selected>30d</option>
+        <option value=\"90d\">90d</option>
+      </select>
+      <button class=\"refresh\" id=\"refreshBtn\" title=\"지금 새로고침\"><span>🔄</span></button>
+      <span class=\"label\">자동 갱신</span>
+      <select id=\"autoRefresh\" title=\"Grafana-style 자동 갱신 인터벌\">
+        <option value=\"0\">Off</option>
+        <option value=\"5\">5s</option>
+        <option value=\"10\">10s</option>
+        <option value=\"30\">30s</option>
+        <option value=\"60\">1m</option>
+        <option value=\"300\">5m</option>
+        <option value=\"900\">15m</option>
+        <option value=\"3600\">1h</option>
+      </select>
+    </div>
+  </div>
+  <div class=\"sub\">
+    <span id=\"meta\">로딩…</span>
+    <span id=\"countdown\" class=\"next\"></span>
+  </div>
   <div id=\"err\" class=\"err\" hidden></div>
   <div class=\"grid\">
-    <div class=\"card\"><h2>일별 비용 (최근 30일)</h2><canvas id=\"daily\"></canvas></div>
+    <div class=\"card\"><h2 id=\"dailyTitle\">일별 비용</h2><canvas id=\"daily\"></canvas></div>
     <div class=\"card\"><h2>모델별 비용 (최근 7일)</h2><canvas id=\"by_model\"></canvas></div>
     <div class=\"card span-2\"><h2>태스크: 소요시간 vs 비용</h2><canvas id=\"scatter\"></canvas></div>
     <div class=\"card span-2\">
@@ -1748,110 +1798,179 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 <script>
 (function () {
+  // ── Auth ──
   const params = new URLSearchParams(location.search);
   const token = params.get(\"token\") || \"\";
+  const errEl = document.getElementById(\"err\");
   if (!token) {
-    const el = document.getElementById(\"err\");
-    el.hidden = false;
-    el.textContent = \"⚠️ ?token=... 쿼리 파라미터를 붙여 다시 접속하세요.\";
+    errEl.hidden = false;
+    errEl.textContent = \"⚠️ ?token=... 쿼리 파라미터를 붙여 다시 접속하세요.\";
     return;
   }
-  const range = params.get(\"range\") || \"30d\";
 
-  fetch(\"/api/stats?range=\" + encodeURIComponent(range) + \"&token=\" + encodeURIComponent(token))
-    .then(r => r.ok ? r.json() : Promise.reject(\"HTTP \" + r.status))
-    .then(render)
-    .catch(e => {
-      const el = document.getElementById(\"err\");
-      el.hidden = false;
-      el.textContent = \"❌ 데이터 로드 실패: \" + e;
-    });
+  // ── Settings (range, auto-refresh) — persisted to localStorage so the
+  // user's choice survives reload. URL param overrides on first visit.
+  const LS_RANGE = \"az_dash_range\";
+  const LS_AUTO = \"az_dash_auto\";
+  const rangeSel = document.getElementById(\"range\");
+  const autoSel = document.getElementById(\"autoRefresh\");
+  const refreshBtn = document.getElementById(\"refreshBtn\");
+  const countdownEl = document.getElementById(\"countdown\");
+
+  const initialRange = params.get(\"range\") || localStorage.getItem(LS_RANGE) || \"30d\";
+  rangeSel.value = initialRange;
+  if (![...rangeSel.options].some(o => o.value === initialRange)) {
+    // URL passed a value we don't have in the dropdown — add it so the
+    // selector reflects reality instead of silently snapping to default.
+    const opt = new Option(initialRange, initialRange, true, true);
+    rangeSel.add(opt);
+  }
+  autoSel.value = localStorage.getItem(LS_AUTO) || \"0\";
+
+  // ── Chart instances kept module-scope so refresh can update in place
+  // (Chart.js destroy + recreate would flicker and lose hover state).
+  let charts = { daily: null, byModel: null, scatter: null };
+  const palette = [
+    \"#6cb2eb\", \"#a78bfa\", \"#34d399\", \"#fbbf24\",
+    \"#f87171\", \"#fb923c\", \"#22d3ee\", \"#94a3b8\",
+  ];
+
+  // ── Auto-refresh state ──
+  let intervalId = null;
+  let countdownTimer = null;
+  let nextRefreshAt = 0;
 
   function fmtUsd(v) { return \"$\" + (v || 0).toFixed(4); }
   function k(n) { return n.toLocaleString(); }
 
+  function setError(msg) {
+    if (msg) {
+      errEl.hidden = false;
+      errEl.textContent = msg;
+    } else {
+      errEl.hidden = true;
+      errEl.textContent = \"\";
+    }
+  }
+
+  async function fetchStats() {
+    const range = rangeSel.value;
+    const url = \"/api/stats?range=\" + encodeURIComponent(range)
+              + \"&token=\" + encodeURIComponent(token);
+    refreshBtn.classList.add(\"spinning\");
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(\"HTTP \" + r.status);
+      const d = await r.json();
+      setError(null);
+      render(d);
+    } catch (e) {
+      setError(\"❌ 데이터 로드 실패: \" + e.message);
+    } finally {
+      refreshBtn.classList.remove(\"spinning\");
+    }
+  }
+
   function render(d) {
+    const now = new Date();
     document.getElementById(\"meta\").textContent =
-      \"기간: \" + d.range_days + \"d  ·  업데이트: \" + d.now;
+      \"기간: \" + d.range_days + \"d  ·  업데이트: \" + now.toLocaleTimeString();
+    document.getElementById(\"dailyTitle\").textContent =
+      \"일별 비용 (최근 \" + d.range_days + \"일)\";
 
-    // Daily bars
-    new Chart(document.getElementById(\"daily\"), {
-      type: \"bar\",
-      data: {
-        labels: d.daily.map(x => x.date.slice(5)),
-        datasets: [{
-          label: \"비용 ($)\",
-          data: d.daily.map(x => x.cost),
-          backgroundColor: \"#6cb2eb\",
-        }],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true } },
-      },
-    });
+    // Daily bar — update in place if exists, else create
+    const dailyData = {
+      labels: d.daily.map(x => x.date.slice(5)),
+      datasets: [{
+        label: \"비용 ($)\",
+        data: d.daily.map(x => x.cost),
+        backgroundColor: \"#6cb2eb\",
+      }],
+    };
+    if (charts.daily) {
+      charts.daily.data = dailyData;
+      charts.daily.update();
+    } else {
+      charts.daily = new Chart(document.getElementById(\"daily\"), {
+        type: \"bar\", data: dailyData,
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } },
+          animation: { duration: 300 },
+        },
+      });
+    }
 
-    // By-model pie
-    const palette = [
-      \"#6cb2eb\", \"#a78bfa\", \"#34d399\", \"#fbbf24\",
-      \"#f87171\", \"#fb923c\", \"#22d3ee\", \"#94a3b8\",
-    ];
-    new Chart(document.getElementById(\"by_model\"), {
-      type: \"doughnut\",
-      data: {
-        labels: d.by_model_7d.map(x => x.model),
-        datasets: [{
-          data: d.by_model_7d.map(x => x.cost),
-          backgroundColor: d.by_model_7d.map((_, i) => palette[i % palette.length]),
-        }],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { position: \"bottom\", labels: { color: \"#c8ccd6\" } },
-          tooltip: {
-            callbacks: {
-              label: ctx => ctx.label + \": \" + fmtUsd(ctx.parsed),
+    // By-model doughnut
+    const byModelData = {
+      labels: d.by_model_7d.map(x => x.model),
+      datasets: [{
+        data: d.by_model_7d.map(x => x.cost),
+        backgroundColor: d.by_model_7d.map((_, i) => palette[i % palette.length]),
+      }],
+    };
+    if (charts.byModel) {
+      charts.byModel.data = byModelData;
+      charts.byModel.update();
+    } else {
+      charts.byModel = new Chart(document.getElementById(\"by_model\"), {
+        type: \"doughnut\", data: byModelData,
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: \"bottom\", labels: { color: \"#c8ccd6\" } },
+            tooltip: {
+              callbacks: { label: ctx => ctx.label + \": \" + fmtUsd(ctx.parsed) },
             },
           },
+          animation: { duration: 300 },
         },
-      },
-    });
+      });
+    }
 
-    // Scatter — color per profile
+    // Scatter — color per profile (datasets need full rebuild because the
+    // set of profiles can change between refreshes)
     const profiles = [...new Set(d.scatter.map(p => p.profile))];
-    const profColor = Object.fromEntries(profiles.map((p, i) => [p, palette[i % palette.length]]));
-    new Chart(document.getElementById(\"scatter\"), {
-      type: \"scatter\",
-      data: {
-        datasets: profiles.map(p => ({
-          label: p,
-          data: d.scatter
-            .filter(s => s.profile === p)
-            .map(s => ({ x: s.elapsed_sec, y: s.cost_usd, task_id: s.task_id })),
-          backgroundColor: profColor[p],
-        })),
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        scales: {
-          x: { title: { display: true, text: \"소요 (초)\" } },
-          y: { title: { display: true, text: \"비용 ($)\" } },
-        },
-        plugins: {
-          legend: { position: \"bottom\", labels: { color: \"#c8ccd6\" } },
-          tooltip: {
-            callbacks: {
-              label: ctx => {
-                const r = ctx.raw;
-                return r.task_id + \"  \" + r.x.toFixed(1) + \"s  \" + fmtUsd(r.y);
+    const profColor = Object.fromEntries(
+      profiles.map((p, i) => [p, palette[i % palette.length]])
+    );
+    const scatterData = {
+      datasets: profiles.map(p => ({
+        label: p,
+        data: d.scatter
+          .filter(s => s.profile === p)
+          .map(s => ({ x: s.elapsed_sec, y: s.cost_usd, task_id: s.task_id })),
+        backgroundColor: profColor[p],
+      })),
+    };
+    if (charts.scatter) {
+      charts.scatter.data = scatterData;
+      charts.scatter.update();
+    } else {
+      charts.scatter = new Chart(document.getElementById(\"scatter\"), {
+        type: \"scatter\", data: scatterData,
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: \"소요 (초)\" } },
+            y: { title: { display: true, text: \"비용 ($)\" } },
+          },
+          plugins: {
+            legend: { position: \"bottom\", labels: { color: \"#c8ccd6\" } },
+            tooltip: {
+              callbacks: {
+                label: ctx => {
+                  const r = ctx.raw;
+                  return r.task_id + \"  \" + r.x.toFixed(1) + \"s  \" + fmtUsd(r.y);
+                },
               },
             },
           },
+          animation: { duration: 300 },
         },
-      },
-    });
+      });
+    }
 
     // Totals grid
     const t = d.totals;
@@ -1869,6 +1988,51 @@ DASHBOARD_HTML = """<!doctype html>
       .map(([l, v]) => \"<div>\" + l + \"</div><div class='v'>\" + v + \"</div>\")
       .join(\"\");
   }
+
+  // ── Auto-refresh wiring ──
+  function applyAutoRefresh() {
+    if (intervalId) { clearInterval(intervalId); intervalId = null; }
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+
+    const seconds = parseInt(autoSel.value || \"0\", 10);
+    if (!seconds) {
+      countdownEl.textContent = \"\";
+      return;
+    }
+    nextRefreshAt = Date.now() + seconds * 1000;
+    intervalId = setInterval(() => {
+      fetchStats();
+      nextRefreshAt = Date.now() + seconds * 1000;
+    }, seconds * 1000);
+    // Live countdown so the user knows the dashboard isn't frozen.
+    countdownTimer = setInterval(() => {
+      const remain = Math.max(0, Math.round((nextRefreshAt - Date.now()) / 1000));
+      countdownEl.textContent = \"⏱ 다음 갱신: \" + remain + \"s\";
+    }, 1000);
+  }
+
+  // ── Wire up listeners ──
+  rangeSel.addEventListener(\"change\", () => {
+    localStorage.setItem(LS_RANGE, rangeSel.value);
+    fetchStats();
+  });
+  autoSel.addEventListener(\"change\", () => {
+    localStorage.setItem(LS_AUTO, autoSel.value);
+    applyAutoRefresh();
+  });
+  refreshBtn.addEventListener(\"click\", () => {
+    fetchStats();
+    if (intervalId) {
+      // Reset the countdown so the user's manual click doesn't get
+      // immediately overridden by the scheduled refresh.
+      const seconds = parseInt(autoSel.value || \"0\", 10);
+      if (seconds) nextRefreshAt = Date.now() + seconds * 1000;
+    }
+  });
+
+  // ── Initial load ──
+  fetchStats();
+  applyAutoRefresh();
 })();
 </script>
 </body>
