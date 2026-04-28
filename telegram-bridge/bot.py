@@ -929,6 +929,215 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Task JSON aggregation (issue #1 M2) ──
 TASKS_DIR = "/app/tasks"
 
+# ── Budget alerts (M5-A · issue #19) ──
+# Persists across restarts via a docker volume mount (/app/data → ./telegram-bridge/data).
+BUDGET_DIR = "/app/data"
+BUDGET_PATH = os.path.join(BUDGET_DIR, "budget.json")
+
+# Threshold ladder. Order matters — _budget_check_window iterates highest first
+# so the strongest crossed level fires (and the lower ones are recorded as
+# already-fired so they don't follow-up next call).
+BUDGET_THRESHOLDS = [
+    (1.50, "🚨 심각", "150%"),
+    (1.00, "❌ 초과", "100%"),
+    (0.80, "⚠️ 주의", "80%"),
+]
+
+
+def _budget_default() -> dict:
+    """Empty budget shape. `alerts_fired` keys self-rotate by date —
+    yesterday's keys are simply never queried again."""
+    return {
+        "day_limit_usd": None,
+        "week_limit_usd": None,
+        "alerts_fired": {},  # "YYYY-MM-DD:day:80" -> True (presence = fired)
+    }
+
+
+_budget: dict = _budget_default()
+
+
+def _load_budget() -> None:
+    """Read budget.json once at startup. Missing file is fine — defaults stand.
+    Corrupt file logs once and resets to defaults so the bot keeps running."""
+    global _budget
+    try:
+        if os.path.isfile(BUDGET_PATH):
+            with open(BUDGET_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Merge into defaults to tolerate older/partial schemas.
+            base = _budget_default()
+            base.update({k: v for k, v in data.items() if k in base})
+            if not isinstance(base.get("alerts_fired"), dict):
+                base["alerts_fired"] = {}
+            _budget = base
+            logger.info(
+                f"[budget] loaded day=${_budget['day_limit_usd']} "
+                f"week=${_budget['week_limit_usd']}"
+            )
+        else:
+            logger.info("[budget] no saved budget — using defaults (no limits)")
+    except Exception as e:
+        logger.warning(f"[budget] load failed, using defaults: {e}")
+        _budget = _budget_default()
+
+
+def _save_budget() -> None:
+    """Best-effort write. Never propagate exceptions — a budget save failure
+    must not crash a /budget command or the hourly sweep."""
+    try:
+        os.makedirs(BUDGET_DIR, exist_ok=True)
+        tmp = BUDGET_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_budget, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, BUDGET_PATH)
+    except Exception as e:
+        logger.warning(f"[budget] save failed: {e}")
+
+
+def _alert_key(window: str, threshold_pct: str, period_id: str) -> str:
+    """`period_id` is 'YYYY-MM-DD' for day, 'YYYY-Www' for week — naturally
+    self-rotating, so old entries never fire again."""
+    return f"{period_id}:{window}:{threshold_pct}"
+
+
+def _compute_window_cost(window: str) -> dict:
+    """Sum cost over a window from on-disk task JSONs.
+
+    Authoritative source — uses the same `_aggregate` pipeline as /today
+    /week, so budget alerts and dashboards never disagree. Going through
+    `usage_today` (RAM-only) would miss any in-progress task and wouldn't
+    survive a bridge restart.
+
+    Returns:
+        {
+          "cost_usd":  float,
+          "tasks":     int,
+          "top_model": (name, cost) | None,
+          "period_id": str,        # for cooldown key
+          "label":     str,        # human-readable for the alert text
+        }
+    """
+    now = _kst_now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if window == "day":
+        start = today
+        end = today + timedelta(days=1)
+        period_id = today.strftime("%Y-%m-%d")
+        label = f"오늘 ({period_id} KST)"
+    elif window == "week":
+        start = today - timedelta(days=6)
+        end = today + timedelta(days=1)
+        # ISO week — naturally rotates Mon→Mon, but we just want a stable
+        # bucket for cooldown so 7-day rolling window's date string is fine.
+        period_id = today.strftime("%G-W%V")
+        label = f"최근 7일 ({start.strftime('%m-%d')}~{today.strftime('%m-%d')} KST)"
+    else:
+        raise ValueError(f"unknown window: {window!r}")
+
+    tasks = _filter_date_range(_load_task_jsons(), start, end)
+    agg = _aggregate(tasks)
+    by_model = agg.get("by_model") or {}
+    top = None
+    if by_model:
+        m, b = max(by_model.items(), key=lambda kv: kv[1]["cost"])
+        top = (m, b["cost"])
+    return {
+        "cost_usd": float(agg["cost_usd"]),
+        "tasks": agg["tasks"],
+        "top_model": top,
+        "period_id": period_id,
+        "label": label,
+    }
+
+
+def _format_budget_alert(window: str, info: dict, limit: float, level_label: str, ratio: float) -> str:
+    """Render the threshold-crossed alert. Spec from issue #19."""
+    cost = info["cost_usd"]
+    remaining = limit - cost
+    pct = ratio * 100
+    period_word = "일간" if window == "day" else "주간"
+    lines = [
+        f"{level_label} {period_word} 예산 {pct:.0f}% 도달",
+        f"{info['label']}",
+        f"비용: ${cost:.4f} / ${limit:.2f} 한도",
+    ]
+    if remaining >= 0:
+        lines.append(f"남은 예산: ${remaining:.4f}")
+    else:
+        lines.append(f"초과: ${abs(remaining):.4f}")
+    if info.get("top_model"):
+        m, mc = info["top_model"]
+        lines.append(f"주요 소비 모델: {m} (${mc:.4f})")
+    return "\n".join(lines)
+
+
+async def _budget_check_window(window: str) -> bool:
+    """Check one window's spend vs its limit. Fires at most ONE alert per
+    call (the highest crossed threshold). Cooldown: per (period_id, window,
+    threshold) — once today's 80% fires, won't fire again today even if
+    spend keeps climbing.
+
+    Returns True if any alert was sent (useful for tests / hourly logging).
+    """
+    limit_key = f"{window}_limit_usd"
+    limit = _budget.get(limit_key)
+    if not limit or limit <= 0:
+        return False
+    info = _compute_window_cost(window)
+    cost = info["cost_usd"]
+    if cost <= 0:
+        return False
+    ratio = cost / float(limit)
+    period_id = info["period_id"]
+
+    fired = _budget.setdefault("alerts_fired", {})
+    sent_any = False
+    # Walk thresholds high-to-low; fire the highest one crossed that hasn't
+    # been fired yet for this period. Mark all lower not-yet-fired thresholds
+    # as fired too so we don't trigger a cascade on the next call.
+    for thresh, level_label, pct_label in BUDGET_THRESHOLDS:
+        key = _alert_key(window, pct_label, period_id)
+        if ratio >= thresh and key not in fired:
+            if not sent_any:
+                msg = _format_budget_alert(window, info, float(limit), level_label, ratio)
+                try:
+                    await send_telegram(msg)
+                    sent_any = True
+                except Exception as e:
+                    logger.warning(f"[budget] alert send failed: {e}")
+                    return False
+            fired[key] = True
+    if sent_any:
+        _save_budget()
+    return sent_any
+
+
+async def budget_check_all() -> None:
+    """Public entrypoint: check both day + week windows. Wired into
+    /track (per-call) and the hourly sweep (catches missed alerts and
+    week-rollover edge cases)."""
+    try:
+        await _budget_check_window("day")
+        await _budget_check_window("week")
+    except Exception as e:
+        logger.warning(f"[budget] sweep error: {e}")
+
+
+async def hourly_budget_sweep() -> None:
+    """Hourly background task. Defensive — `_budget_check_window` is also
+    called from /track, but that path can be skipped if AZ batches /track
+    or fails-quiet. Hourly cadence is plenty for a 24h-budget signal."""
+    logger.info("Hourly budget sweep started")
+    while True:
+        try:
+            await asyncio.sleep(3600)  # 1 hour
+            await budget_check_all()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[budget] hourly sweep error: {e}")
+
 
 def _load_task_jsons() -> list[dict]:
     """Read every task JSON from the mounted AZ logs dir.
@@ -1466,6 +1675,106 @@ async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Budget management for spend alerts (issue #19).
+
+    Usage:
+      /budget                        — same as /budget show
+      /budget show                   — current limits + today's progress
+      /budget day <USD>              — set daily limit, e.g. /budget day 5
+      /budget week <USD>             — set weekly limit
+      /budget day off / week off     — clear a limit
+      /budget reset                  — clear all alert cooldowns (re-arm)
+    """
+    if update.effective_chat.id != CHAT_ID:
+        return
+    msg = update.effective_message
+    if msg is None:
+        return
+
+    args = list(context.args or [])
+    sub = (args[0].lower() if args else "show")
+
+    # Default / show: render limits + today's spend ratio per window.
+    if sub in ("", "show", "status"):
+        lines = ["💰 예산 설정"]
+        for window, label in (("day", "일간"), ("week", "주간")):
+            limit = _budget.get(f"{window}_limit_usd")
+            info = _compute_window_cost(window)
+            cost = info["cost_usd"]
+            if limit and limit > 0:
+                ratio = (cost / limit) if limit else 0
+                pct = ratio * 100
+                bar_full = int(min(ratio, 1.5) * 10)  # cap visual at 150%
+                bar = "█" * min(bar_full, 10) + "░" * max(0, 10 - bar_full)
+                # Mark over-budget visually past 100%.
+                marker = "🚨" if ratio >= 1.5 else ("❌" if ratio >= 1.0 else ("⚠️" if ratio >= 0.8 else "✅"))
+                lines.append(
+                    f"  {marker} {label}: ${cost:.4f} / ${limit:.2f} ({pct:.0f}%)\n"
+                    f"     [{bar}]"
+                )
+            else:
+                lines.append(f"  ⚪ {label}: 한도 미설정 (현재 ${cost:.4f})")
+        lines.append("")
+        lines.append("설정: /budget day 5  ·  /budget week 30  ·  /budget reset")
+        await msg.reply_text("\n".join(lines))
+        return
+
+    if sub == "reset":
+        _budget["alerts_fired"] = {}
+        _save_budget()
+        await msg.reply_text("✅ 알림 쿨다운 초기화. 다음 임계 도달 시 다시 발송됩니다.")
+        return
+
+    if sub in ("day", "week"):
+        if len(args) < 2:
+            await msg.reply_text(f"사용법: /budget {sub} <USD>  · 예: /budget {sub} 5  ·  /budget {sub} off")
+            return
+        val = args[1].lower()
+        key = f"{sub}_limit_usd"
+        if val in ("off", "clear", "0", "none"):
+            _budget[key] = None
+            # Drop fired keys for this window so re-enabling doesn't suppress
+            # a legitimate first alert.
+            _budget["alerts_fired"] = {
+                k: v for k, v in (_budget.get("alerts_fired") or {}).items()
+                if f":{sub}:" not in k
+            }
+            _save_budget()
+            await msg.reply_text(f"✅ {sub} 한도 해제됨.")
+            return
+        try:
+            amount = float(val.replace("$", "").replace(",", ""))
+            if amount <= 0:
+                raise ValueError("must be positive")
+        except ValueError:
+            await msg.reply_text(f"⚠️ 숫자가 아님: {args[1]!r}. 예: /budget {sub} 5")
+            return
+        _budget[key] = amount
+        # Clear this window's fired keys so the new limit gets evaluated cleanly.
+        _budget["alerts_fired"] = {
+            k: v for k, v in (_budget.get("alerts_fired") or {}).items()
+            if f":{sub}:" not in k
+        }
+        _save_budget()
+        # Immediately evaluate so the user gets feedback if already over.
+        await _budget_check_window(sub)
+        await msg.reply_text(
+            f"✅ {sub} 한도 ${amount:.2f} 설정됨.\n"
+            f"   80%/100%/150% 도달 시 알림 (각 단계 1회 / 일)."
+        )
+        return
+
+    await msg.reply_text(
+        "사용법:\n"
+        "  /budget                — 현황\n"
+        "  /budget day 5          — 일간 $5 한도\n"
+        "  /budget week 30        — 주간 $30 한도\n"
+        "  /budget day off        — 해제\n"
+        "  /budget reset          — 쿨다운 초기화"
+    )
+
+
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """토큰 사용량 + 비용 조회 (cache 토큰 포함)"""
     if update.effective_chat.id != CHAT_ID:
@@ -1574,6 +1883,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /today → 오늘의 태스크 집계 (영구 데이터)\n"
         "  /week → 최근 7일 일별 + 합계\n"
         "  /tasks [N] → 최근 N개 태스크 목록 (기본 10)\n"
+        "  /budget [day|week] [USD] → 예산 한도 + 자동 알림\n"
         "  /backup → 설정 경량 백업 (ZIP 파일 전송)\n"
         "  /help → 도움말"
     )
@@ -1622,6 +1932,13 @@ async def usage_track_handler(request):
         cache_read = int(data.get("cache_read_tokens", 0))
         cache_creation = int(data.get("cache_creation_tokens", 0))
         track_usage(model, input_tokens, output_tokens, cache_read, cache_creation)
+        # Budget check fires AFTER track_usage so the cumulative cost in the
+        # on-disk task JSONs has caught up. Fire-and-forget — never let a
+        # failed alert reject the /track request itself.
+        try:
+            await budget_check_all()
+        except Exception as e:
+            logger.warning(f"[budget] post-track check failed: {e}")
         return web.json_response({
             "ok": True,
             "today": usage_today,
@@ -1693,12 +2010,20 @@ async def post_init(application: Application):
     tg_bot = application.bot
     asyncio.create_task(monitor_agent_zero())
     asyncio.create_task(daily_usage_reporter())
-    logger.info("Monitor + daily reporter tasks created")
+    # M5-A: hourly budget sweep — defensive double-check on top of the
+    # per-/track call (issue #19).
+    asyncio.create_task(hourly_budget_sweep())
+    logger.info("Monitor + daily reporter + budget sweep tasks created")
 
 
 def main():
     # LiteLLM 모델 가격표 로드 (GitHub에서 최신 다운로드)
     _load_model_cost_map()
+
+    # M5-A: load persisted budget settings before the webhook server starts
+    # accepting /track requests (which trigger budget_check_all). Otherwise
+    # the first /track after restart would use empty defaults and skip alerts.
+    _load_budget()
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
@@ -1713,6 +2038,7 @@ def main():
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("week", cmd_week))
     app.add_handler(CommandHandler("tasks", cmd_tasks))
+    app.add_handler(CommandHandler("budget", cmd_budget))
     app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
