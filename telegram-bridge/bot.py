@@ -66,6 +66,26 @@ tg_bot: Bot | None = None
 # 채팅 목록 캐시
 cached_contexts: list = []
 
+
+def _short_id(ctx_id: str | None, max_len: int = 12) -> str:
+    """Render a context ID for display.
+
+    AZ's `helpers.guids.generate_id` defaults to length=8, so today's IDs
+    are already 8 chars total. The previous code did `id[:8] + "..."`
+    which was a UX lie — the ellipsis suggested truncation when nothing
+    had been truncated, and users couldn't tell where the ID ended.
+
+    Behavior:
+      - empty / None → "없음"
+      - len(id) <= max_len → return as-is, no ellipsis
+      - longer → truncate to max_len + "..." (real truncation, real marker)
+    """
+    if not ctx_id:
+        return "없음"
+    if len(ctx_id) <= max_len:
+        return ctx_id
+    return ctx_id[:max_len] + "..."
+
 # ── 토큰 사용량 추적 ──
 usage_today: dict = {
     "date": _kst_now().strftime("%Y-%m-%d"),
@@ -398,9 +418,9 @@ async def monitor_agent_zero():
 
             # 자동 추적: 웹에서 다른 채팅으로 전환된 경우
             if monitor_auto_follow and new_context and new_context != monitor_context:
-                old_ctx = monitor_context[:8] if monitor_context else "없음"
-                new_ctx = new_context[:8]
-                await send_telegram(f"🔄 채팅 전환 감지: {old_ctx}... → {new_ctx}...")
+                old_ctx = _short_id(monitor_context)
+                new_ctx = _short_id(new_context)
+                await send_telegram(f"🔄 채팅 전환 감지: {old_ctx} → {new_ctx}")
                 monitor_context = new_context
                 monitor_log_guid = new_log_guid
                 # 현재 시점으로 스킵 (이전 히스토리 전송 방지)
@@ -578,7 +598,7 @@ async def check_agent_zero_status() -> str:
         except Exception as e:
             logger.debug(f"model_config_get failed: {e}")
 
-        ctx_short = monitor_context[:8] + "..." if monitor_context else "없음"
+        ctx_short = _short_id(monitor_context)
         return (
             f"Agent Zero: 정상 동작 중\n\n"
             f"📋 프로필: {profile}\n"
@@ -642,9 +662,9 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ctx_id = ctx.get("id", "")
         name = ctx.get("name", "이름 없음")
         is_current = "→ " if ctx_id == monitor_context else "  "
-        lines.append(f"{is_current}{i+1}. {name}\n   ID: {ctx_id[:12]}...")
+        lines.append(f"{is_current}{i+1}. {name}\n   ID: {_short_id(ctx_id)}")
 
-    lines.append(f"\n현재 추적 중: {monitor_context[:12]}..." if monitor_context else "\n현재 추적 중: 없음")
+    lines.append(f"\n현재 추적 중: {_short_id(monitor_context)}")
     lines.append("\n채팅 전환: /switch [번호]")
 
     await update.message.reply_text("\n".join(lines))
@@ -685,7 +705,7 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 현재 시점으로 스킵 (이전 히스토리 전송 방지)
     monitor_log_version = await sync_log_version(target_id)
 
-    await update.message.reply_text(f"✅ 채팅 전환: {target_name}\nID: {target_id[:12]}...")
+    await update.message.reply_text(f"✅ 채팅 전환: {target_name}\nID: {_short_id(target_id)}")
 
 
 async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -750,7 +770,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     monitor_log_version = await sync_log_version(new_ctxid)
 
     await msg.reply_text(
-        f"✅ 새 대화 시작됨\nID: {new_ctxid[:12]}..."
+        f"✅ 새 대화 시작됨\nID: {_short_id(new_ctxid)}"
     )
 
 
@@ -793,7 +813,7 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await tg_bot.send_document(
             chat_id=CHAT_ID,
             document=json_file,
-            caption=f"📋 채팅 로그 (Context: {monitor_context[:12]}...)",
+            caption=f"📋 채팅 로그 (Context: {_short_id(monitor_context)})",
         )
 
         # 텍스트 요약도 함께 생성
