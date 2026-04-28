@@ -555,10 +555,28 @@ async def check_agent_zero_status() -> str:
         except Exception as e:
             logger.debug(f"settings_get failed: {e}")
 
-        # 모델명은 v1.9 settings 에 더 이상 노출되지 않습니다 (프로파일별
-        # 구성으로 이동). 가장 최근 task JSON 에서 실제 호출된 모델을 읽는
-        # 편이 진실에 가깝습니다 — 표시값과 실제 청구가 어긋날 일이 없음.
-        chat_model, util_model = _recent_models_from_tasks()
+        # 모델은 v1.9 에서 _model_config 플러그인으로 옮겨졌고 자체 API 가
+        # 있습니다 (/api/plugins/_model_config/model_config_get). 사용자 override
+        # 가 없으면 default_config.yaml 의 값이 돌아와서, AZ 내부 라우팅이
+        # 실제로 보고 있는 설정과 정확히 일치합니다.
+        chat_model, util_model = "알 수 없음", "알 수 없음"
+        try:
+            async with session.post(
+                f"{AZ_API_URL}{AZ_API_PREFIX}/plugins/_model_config/model_config_get",
+                json={"agent_profile": profile if profile != "알 수 없음" else ""},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as mc_resp:
+                if mc_resp.status == 200:
+                    mc = (await mc_resp.json()).get("config") or {}
+                    cm = mc.get("chat_model") or {}
+                    um = mc.get("utility_model") or {}
+                    if cm.get("name"):
+                        chat_model = cm["name"]
+                    if um.get("name"):
+                        util_model = um["name"]
+        except Exception as e:
+            logger.debug(f"model_config_get failed: {e}")
 
         ctx_short = monitor_context[:8] + "..." if monitor_context else "없음"
         return (
@@ -2112,56 +2130,6 @@ def _filter_date_range(tasks: list[dict], start, end) -> list[dict]:
         if start <= ts_local < end:
             out.append(t)
     return out
-
-
-def _recent_models_from_tasks(scan: int = 50) -> tuple[str, str]:
-    """Best-guess (chat_model, util_model) from the last N task JSONs.
-
-    Why we don't use settings_get: AZ v1.9 dropped chat_model_name /
-    util_model_name from the global settings dict — model is now per-profile
-    config, lives outside what the bridge can see via the public API.
-
-    Heuristic:
-      • Walk task JSONs newest-first
-      • For each `llm_calls[]` entry, classify by model substring:
-          haiku  → util  (cheap utility model)
-          sonnet/opus/other → chat (main reasoning model)
-      • Return the first chat-class hit and first util-class hit
-      • If no util seen but only chat seen, util shows "(미사용)"
-
-    Returns ("알 수 없음", "알 수 없음") when there are no task JSONs.
-    """
-    chat_model = None
-    util_model = None
-    try:
-        tasks = _load_task_jsons()
-    except Exception:
-        return ("알 수 없음", "알 수 없음")
-    if not tasks:
-        return ("알 수 없음", "알 수 없음")
-
-    # Newest first — _load_task_jsons sorts ascending so reverse + limit.
-    for t in reversed(tasks[-scan:]):
-        for c in t.get("llm_calls") or []:
-            m = c.get("model")
-            if not isinstance(m, str) or not m:
-                continue
-            ml = m.lower()
-            if "haiku" in ml:
-                if util_model is None:
-                    util_model = m
-            else:
-                if chat_model is None:
-                    chat_model = m
-            if chat_model and util_model:
-                break
-        if chat_model and util_model:
-            break
-
-    return (
-        chat_model or "알 수 없음",
-        util_model or ("(미사용)" if chat_model else "알 수 없음"),
-    )
 
 
 def _data_quality_summary(tasks: list[dict]) -> dict:
