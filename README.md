@@ -151,7 +151,14 @@ scatter (프로파일별 색상), 윈도우 합계.
 
 ## Preview
 
+**AgentZero & Telegram**
+
 ![20260403](https://github.com/user-attachments/assets/5dbd7dff-7e80-4d03-8734-c7cafc810087)
+
+**AZ Cost Dashboard**
+
+<img width="944" height="958" alt="image" src="https://github.com/user-attachments/assets/031552cf-fc38-458e-b925-93c9b08b796f" />
+
 
 ## License
 
