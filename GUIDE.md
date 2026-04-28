@@ -571,6 +571,37 @@ Agent Zero에게 지시할 때 활용:
 - 세션 유지: aiohttp CookieJar로 쿠키 유지, 403 시 자동 재발급
 - 보안: `TELEGRAM_CHAT_ID`로 본인만 봇 사용 가능 (다른 사용자 차단)
 
+### Web Dashboard (선택, M5-E)
+
+`telegram-bridge` 의 8443 포트에 비용/사용량 차트 페이지가 함께 떠 있습니다 (issue #23). 텔레그램 텍스트 명령어 (`/today`, `/week`, `/usage`) 외에 시각화가 필요할 때 사용하세요.
+
+**활성화 (기본은 비활성)**:
+
+`.env` 에 토큰 추가 후 컨테이너 재기동.
+```bash
+echo "DASHBOARD_TOKEN=$(openssl rand -hex 16)" >> .env
+docker compose up -d --force-recreate telegram-bridge
+```
+
+`DASHBOARD_TOKEN` 이 빈 값/미설정이면 `/dashboard` 와 `/api/stats` 둘 다 **404** 로 차단됩니다 (대시보드 자체가 켜지지 않음). 임의의 비밀번호 역할을 하므로 외부 노출하지 마세요.
+
+**접속**:
+```
+브라우저:  http://localhost:8443/dashboard?token=<TOKEN>
+JSON API:  curl "http://localhost:8443/api/stats?range=30d&token=<TOKEN>"
+헤더 인증: curl -H "X-Dashboard-Token: <TOKEN>" http://localhost:8443/api/stats
+```
+
+쿼리 파라미터(`?token=`)는 액세스 로그/프록시에 토큰이 남으므로, 운영 환경에선 헤더 인증을 권장합니다.
+
+**제공 차트**: 일별 비용 (30일 bar), 모델별 비용 (7일 doughnut), 태스크 소요시간 vs 비용 (scatter, 프로파일별 색상), 윈도우 합계.
+
+**원격 접속**: 8443 포트는 `docker-compose.yml` 에서 호스트 로컬에만 바인딩됩니다. 원격에서 보려면 SSH 포트포워딩을 사용하세요:
+```bash
+ssh -L 8443:localhost:8443 <host>
+# 로컬 브라우저에서 http://localhost:8443/dashboard?token=<TOKEN> 접속
+```
+
 ---
 
 ## 15. 팁: 호스트 파일시스템 접근
