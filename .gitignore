@@ -28,3 +28,10 @@ docker-compose.override.yaml
 # M5-A: telegram-bridge persistent runtime data (budget settings, alert
 # cooldown, future pricing snapshots). Per-deploy state — never commit.
 telegram-bridge/data/
+
+# AZ user-plugin overrides — _model_config/config.json holds the
+# chat/utility model selection (per-deploy state, may include API keys).
+# Mount target: /a0/usr/plugins (see docker-compose.yml). Allow .gitkeep
+# through so the bind-mount source directory is tracked in git.
+agent-zero/usr-plugins/*
+!agent-zero/usr-plugins/.gitkeep

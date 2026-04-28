@@ -61,6 +61,12 @@ services:
       - ./agent-zero/extensions/python/util_model_call_after/_50_task_report_util_llm.py:/a0/extensions/python/util_model_call_after/_50_task_report_util_llm.py:ro
       - ./agent-zero/extensions/python/monologue_end/_50_task_report_finish.py:/a0/extensions/python/monologue_end/_50_task_report_finish.py:ro
       - ./agent-zero/settings.json:/a0/usr/settings.json
+      # Persist plugin overrides — chiefly /a0/usr/plugins/_model_config/config.json
+      # which holds the active chat/utility model selection. Without this mount
+      # `docker compose up --force-recreate` wipes the override and AZ falls
+      # back to default_config.yaml — whose default chat_model name has a typo
+      # (claude-sonnet-4.6 with a DOT) that Anthropic rejects with 404.
+      - ./agent-zero/usr-plugins:/a0/usr/plugins
     entrypoint: ["/bin/sh", "-c", "sh /a0/git-init.sh && exec /exe/initialize.sh ${BRANCH:-main}"]
     depends_on:
       cliproxy:
