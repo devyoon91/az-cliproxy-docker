@@ -689,16 +689,69 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global az_context, monitor_context, monitor_log_version
+    """Create a brand-new Agent Zero chat context and switch to it.
+
+    Previous behavior: just zeroed the local az_context / monitor_context and
+    relied on the next user message to lazily create a context. That meant:
+      - The reply "새 대화를 시작합니다" was misleading (no chat created yet)
+      - /chats wouldn't show the new chat until something was sent
+      - With monitor_auto_follow ON, the next poll would latch back onto
+        AZ's previously-active context — defeating the reset entirely
+
+    Fixed behavior: calls AZ's /api/chat_create (the same endpoint the web
+    UI's "New Chat" button uses), gets the real ctxid back, then pins both
+    az_context and monitor_context to it before replying.
+    """
+    global az_context, monitor_context, monitor_log_version, monitor_log_guid
     if update.effective_chat.id != CHAT_ID:
         return
-    az_context = ""
-    monitor_context = ""
-    await close_az_session()
-    # 새 세션이므로 다음 poll에서 sync_log_version이 자동 처리
-    # 빈 컨텍스트는 poll 시 새 컨텍스트를 받아오며 그때 sync됨
-    monitor_log_version = await sync_log_version("")
-    await update.message.reply_text("새 대화를 시작합니다.")
+    msg = update.effective_message
+    if msg is None:
+        return
+
+    new_ctxid = ""
+    try:
+        session = await get_az_session()
+        headers = get_headers()
+        # Pass current_context so AZ can carry over project / model-override
+        # data per its chat_inherit_project setting (matches web UI behavior).
+        async with session.post(
+            f"{AZ_API_URL}{AZ_API_PREFIX}/chat_create",
+            json={"current_context": az_context or ""},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status == 403:
+                await close_az_session()
+                session = await get_az_session()
+                headers = get_headers()
+                async with session.post(
+                    f"{AZ_API_URL}{AZ_API_PREFIX}/chat_create",
+                    json={"current_context": az_context or ""},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as retry:
+                    if retry.status == 200:
+                        new_ctxid = (await retry.json()).get("ctxid", "")
+            elif resp.status == 200:
+                new_ctxid = (await resp.json()).get("ctxid", "")
+    except Exception as e:
+        logger.error(f"chat_create failed: {e}")
+
+    if not new_ctxid:
+        await msg.reply_text("⚠️ 새 대화 생성 실패 — Agent Zero 응답 확인 필요.")
+        return
+
+    az_context = new_ctxid
+    monitor_context = new_ctxid
+    monitor_log_guid = ""
+    # Skip past whatever log_version the new context starts at so we don't
+    # re-stream the (empty) initial state. This mirrors /switch behavior.
+    monitor_log_version = await sync_log_version(new_ctxid)
+
+    await msg.reply_text(
+        f"✅ 새 대화 시작됨\nID: {new_ctxid[:12]}..."
+    )
 
 
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
