@@ -614,8 +614,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /backup → 설정 백업 파일 전송\n"
         "• /monitor_on → 모니터링 켜기\n"
         "• /monitor_off → 모니터링 끄기\n"
-        "• /follow_on → 자동 추적 켜기\n"
-        "• /follow_off → 자동 추적 끄기\n"
+        "• /track_chat_on → 채팅 자동 추적 켜기 (웹 UI 채팅 전환 따라감)\n"
+        "• /track_chat_off → 채팅 자동 추적 끄기 (현재 채팅 고정)\n"
         "• /help → 도움말"
     )
 
@@ -2704,20 +2704,36 @@ async def cmd_monitor_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔇 웹 채팅 모니터링이 꺼졌습니다.")
 
 
-async def cmd_follow_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_track_chat_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-track which AZ chat the monitor watches.
+
+    Renamed from /follow_on for clarity — old name was ambiguous about
+    direction (does \"follow\" mean Telegram→AZ or AZ→Telegram?). Both
+    /monitor and /track_chat are AZ→Telegram concerns; /track_chat
+    specifically controls whether the monitor switches its target when
+    the AZ web UI activates a different chat.
+
+    /follow_on is kept registered as an alias for muscle memory.
+    """
     global monitor_auto_follow
     if update.effective_chat.id != CHAT_ID:
         return
     monitor_auto_follow = True
-    await update.message.reply_text("✅ 자동 추적 켜짐: 웹에서 채팅 전환 시 모니터가 자동으로 따라갑니다.")
+    await update.message.reply_text(
+        "✅ 채팅 자동 추적 켜짐: 웹에서 채팅 전환 시 모니터가 따라갑니다."
+    )
 
 
-async def cmd_follow_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_track_chat_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Pin the monitor to its current chat regardless of AZ web's active chat.
+    See cmd_track_chat_on for the rename rationale."""
     global monitor_auto_follow
     if update.effective_chat.id != CHAT_ID:
         return
     monitor_auto_follow = False
-    await update.message.reply_text("📌 자동 추적 꺼짐: 현재 채팅만 고정 추적합니다.")
+    await update.message.reply_text(
+        "📌 채팅 자동 추적 꺼짐: 현재 채팅만 고정 추적합니다."
+    )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2737,8 +2753,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "모니터링:\n"
         "  /monitor_on → 웹 채팅 알림 켜기 (현재 시점부터)\n"
         "  /monitor_off → 웹 채팅 알림 끄기\n"
-        "  /follow_on → 채팅 자동 추적 켜기\n"
-        "  /follow_off → 채팅 자동 추적 끄기\n\n"
+        "  /track_chat_on → 채팅 자동 추적 켜기 (웹 UI 채팅 전환 따라감)\n"
+        "  /track_chat_off → 채팅 자동 추적 끄기 (현재 채팅 고정)\n\n"
         "상태/비용:\n"
         "  /status → Agent Zero 상태 확인\n"
         "  /usage → 세션 내 토큰/비용 (bridge 재시작 시 초기화)\n"
@@ -2917,8 +2933,14 @@ def main():
     app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
-    app.add_handler(CommandHandler("follow_on", cmd_follow_on))
-    app.add_handler(CommandHandler("follow_off", cmd_follow_off))
+    # Primary names (clearer about direction — both /monitor and /track_chat
+    # are AZ→Telegram concerns, /track_chat picks WHICH chat to watch).
+    app.add_handler(CommandHandler("track_chat_on", cmd_track_chat_on))
+    app.add_handler(CommandHandler("track_chat_off", cmd_track_chat_off))
+    # Legacy aliases — old names still work for muscle memory / saved scripts.
+    # Drop these after a transition window if desired.
+    app.add_handler(CommandHandler("follow_on", cmd_track_chat_on))
+    app.add_handler(CommandHandler("follow_off", cmd_track_chat_off))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
