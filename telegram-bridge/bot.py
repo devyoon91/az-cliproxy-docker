@@ -1139,6 +1139,351 @@ async def hourly_budget_sweep() -> None:
             logger.warning(f"[budget] hourly sweep error: {e}")
 
 
+# ── Pricing drift detection (M5-C · issue #21) ──
+# Daily 00:30 KST snapshot of the LiteLLM price table for models we've
+# actually called in the past 7 days. Diffs against the previous snapshot
+# and Telegrams price changes. Stored as one JSON per day under
+# /app/data/pricing/, rotated at 30 days.
+PRICING_DIR = os.path.join(BUDGET_DIR, "pricing")
+PRICING_RETENTION_DAYS = 30
+LITELLM_PRICE_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+    "model_prices_and_context_window.json"
+)
+# Fields whose change we surface in the alert. context_window etc. change
+# silently — we only care about $ that flows through `compute_cost`.
+PRICING_DIFF_FIELDS = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+)
+
+
+def _resolve_litellm_key(model: str) -> str | None:
+    """Resolve an AZ-side model name to its canonical LiteLLM key.
+
+    Mirrors `_model_info`'s lookup order but returns the KEY (not the rates)
+    so we can store snapshots under one stable identifier even when AZ
+    sends multiple aliases (e.g. with vs without the `anthropic/` prefix).
+    """
+    if not isinstance(model, str) or not model:
+        return None
+    if model in _model_cost_map:
+        return model
+    aliases = {
+        "anthropic/claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
+        "anthropic/claude-haiku-4-5": "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    }
+    if model in aliases and aliases[model] in _model_cost_map:
+        return aliases[model]
+    if model.startswith("anthropic/"):
+        tail = model.split("/", 1)[1]
+        if tail in _model_cost_map:
+            return tail
+    return None
+
+
+def _interested_models(window_days: int = 7) -> dict[str, list[str]]:
+    """Models actually called in the last `window_days` days.
+
+    Returns a mapping `{litellm_key: [az_aliases_seen]}` so we can show the
+    user-recognizable AZ name alongside the canonical LiteLLM key when the
+    drift alert fires. Models that don't resolve to a LiteLLM key are
+    skipped — they wouldn't be priced anyway.
+    """
+    now = _kst_now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = today - timedelta(days=window_days - 1)
+    end = today + timedelta(days=1)
+    tasks = _filter_date_range(_load_task_jsons(), start, end)
+    seen: dict[str, set[str]] = {}
+    for t in tasks:
+        for c in t.get("llm_calls") or []:
+            az_name = c.get("model")
+            key = _resolve_litellm_key(az_name) if az_name else None
+            if not key:
+                continue
+            seen.setdefault(key, set()).add(az_name)
+    return {k: sorted(v) for k, v in seen.items()}
+
+
+async def _fetch_litellm_table() -> dict | None:
+    """Async fetch of the live LiteLLM price table. None on failure —
+    caller falls back to the in-memory `_model_cost_map` (loaded at startup)
+    so a transient HTTP failure still produces a snapshot per #21's
+    "원격 HTTP 실패 시 지난 스냅샷으로 fallback" acceptance criterion."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(LITELLM_PRICE_URL) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[pricing] fetch HTTP {resp.status}")
+                    return None
+                return await resp.json(content_type=None)
+    except Exception as e:
+        logger.warning(f"[pricing] fetch failed: {e}")
+        return None
+
+
+def _select_for_snapshot(table: dict, interested: dict[str, list[str]]) -> dict:
+    """Filter the full LiteLLM table down to interested models + the
+    cost fields we track. Drops irrelevant metadata so each daily snapshot
+    is small (~1KB for typical 4-model usage)."""
+    out = {}
+    for key, aliases in interested.items():
+        info = table.get(key)
+        if not info:
+            continue
+        rates = {f: info.get(f) for f in PRICING_DIFF_FIELDS if info.get(f) is not None}
+        if not rates:
+            continue
+        rates["az_aliases"] = aliases
+        out[key] = rates
+    return out
+
+
+def _snapshot_path(date_str: str) -> str:
+    return os.path.join(PRICING_DIR, f"{date_str}.json")
+
+
+def _save_snapshot(date_str: str, models: dict) -> None:
+    """Atomic write — never leave a half-flushed file behind."""
+    try:
+        os.makedirs(PRICING_DIR, exist_ok=True)
+        path = _snapshot_path(date_str)
+        payload = {
+            "snapshot_date": date_str,
+            "fetched_at": _kst_now().isoformat(),
+            "source_url": LITELLM_PRICE_URL,
+            "models": models,
+        }
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        logger.info(f"[pricing] saved snapshot {date_str} ({len(models)} models)")
+    except Exception as e:
+        logger.warning(f"[pricing] save failed: {e}")
+
+
+def _load_snapshot(date_str: str) -> dict | None:
+    path = _snapshot_path(date_str)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"[pricing] load {date_str} failed: {e}")
+        return None
+
+
+def _list_snapshots() -> list[str]:
+    """Return snapshot date strings (YYYY-MM-DD), most recent first."""
+    if not os.path.isdir(PRICING_DIR):
+        return []
+    out = []
+    for name in os.listdir(PRICING_DIR):
+        if name.endswith(".json") and not name.endswith(".tmp"):
+            out.append(name[:-5])  # strip ".json"
+    out.sort(reverse=True)
+    return out
+
+
+def _previous_snapshot(before: str) -> tuple[str, dict] | None:
+    """Find the most recent snapshot strictly before `before`. Used as the
+    diff baseline — by definition we want yesterday's data, not today's."""
+    for date_str in _list_snapshots():
+        if date_str < before:
+            data = _load_snapshot(date_str)
+            if data:
+                return date_str, data
+    return None
+
+
+def _diff_snapshots(prev: dict, curr: dict) -> list[dict]:
+    """Compare model rates between two snapshots.
+
+    Returns a list of change records:
+      {model, alias, field, before, after, pct_change}
+
+    A field counts as changed only when both sides have a value AND they
+    differ — newly-added or newly-removed fields are reported via
+    `before=None` / `after=None` so the user notices schema additions too.
+    """
+    prev_models = (prev or {}).get("models") or {}
+    curr_models = (curr or {}).get("models") or {}
+    keys = set(prev_models) | set(curr_models)
+    changes = []
+    for key in sorted(keys):
+        p = prev_models.get(key) or {}
+        c = curr_models.get(key) or {}
+        alias = (c.get("az_aliases") or p.get("az_aliases") or [key])[0]
+        for field in PRICING_DIFF_FIELDS:
+            pv = p.get(field)
+            cv = c.get(field)
+            if pv == cv:
+                continue
+            pct = None
+            if isinstance(pv, (int, float)) and pv > 0 and isinstance(cv, (int, float)):
+                pct = (cv - pv) / pv * 100.0
+            changes.append({
+                "model": key,
+                "alias": alias,
+                "field": field,
+                "before": pv,
+                "after": cv,
+                "pct_change": pct,
+            })
+    return changes
+
+
+def _format_pricing_diff(changes: list[dict], prev_date: str, curr_date: str) -> str:
+    """One alert message covering all detected changes.
+
+    Shape:
+      💱 가격 변동 감지 (2026-04-27 → 2026-04-28)
+        claude-sonnet-4-5-20250929 (claude-sonnet-4-6)
+          input_cost_per_token: $3.00 → $2.50 / 1M (-16.7%)
+    """
+    def fmt_rate(v) -> str:
+        if v is None:
+            return "—"
+        # All cost-per-token rates are in the e-7 to e-5 range; per-1M is
+        # easier to eyeball. Two decimals catch sub-cent changes.
+        return f"${v * 1_000_000:.2f}/1M"
+
+    by_model: dict[str, list[dict]] = {}
+    for ch in changes:
+        by_model.setdefault(ch["model"], []).append(ch)
+
+    lines = [f"💱 가격 변동 감지 ({prev_date} → {curr_date})"]
+    for model in sorted(by_model.keys()):
+        rows = by_model[model]
+        alias = rows[0].get("alias") or model
+        header = f"  {model}" + (f"  ({alias})" if alias != model else "")
+        lines.append(header)
+        for ch in rows:
+            arrow = f"{fmt_rate(ch['before'])} → {fmt_rate(ch['after'])}"
+            if ch["pct_change"] is not None:
+                sign = "+" if ch["pct_change"] >= 0 else ""
+                arrow += f"  ({sign}{ch['pct_change']:.1f}%)"
+            lines.append(f"    {ch['field']}: {arrow}")
+    return "\n".join(lines)
+
+
+def _rotate_pricing_snapshots(keep_days: int = PRICING_RETENTION_DAYS) -> int:
+    """Delete snapshot files older than `keep_days`. Returns count removed.
+
+    Old snapshots are useful for archeology but we don't need 6 months of
+    them locally — the GitHub source is authoritative for historical
+    queries. 30 days covers 'did the Sonnet rate change last week?'
+    """
+    if not os.path.isdir(PRICING_DIR):
+        return 0
+    today = _kst_now().date()
+    removed = 0
+    for date_str in _list_snapshots():
+        try:
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue  # un-dated file, leave alone
+        if (today - d).days > keep_days:
+            try:
+                os.remove(_snapshot_path(date_str))
+                removed += 1
+            except OSError as e:
+                logger.warning(f"[pricing] rotate {date_str} failed: {e}")
+    if removed:
+        logger.info(f"[pricing] rotated {removed} snapshot(s) older than {keep_days}d")
+    return removed
+
+
+async def take_pricing_snapshot(force: bool = False, alert: bool = True) -> dict | None:
+    """Fetch fresh prices, save today's snapshot, diff vs previous, alert.
+
+    `force=True`  — overwrite today's snapshot if it already exists. Used
+                    by `/pricing snapshot` when the user wants to re-poll
+                    right now (e.g. after the daily run failed).
+    `alert=False` — silent run; used by smoke tests and the on-demand
+                    `/pricing diff` query that just wants to inspect.
+
+    Returns the saved snapshot dict on success, None on failure.
+    """
+    today = _kst_now().strftime("%Y-%m-%d")
+    if not force and _load_snapshot(today) is not None:
+        logger.info(f"[pricing] today's snapshot {today} already exists, skipping")
+        return _load_snapshot(today)
+
+    table = await _fetch_litellm_table()
+    if table is None:
+        # Fallback: in-memory table loaded at startup. Better an old snapshot
+        # than no snapshot — matches issue #21's resilience criterion.
+        if _model_cost_map:
+            logger.info("[pricing] using in-memory startup table as fallback")
+            table = _model_cost_map
+        else:
+            logger.warning("[pricing] no table available — skipping snapshot")
+            return None
+
+    interested = _interested_models()
+    if not interested:
+        logger.info("[pricing] no interested models in window — skipping")
+        return None
+
+    selected = _select_for_snapshot(table, interested)
+    _save_snapshot(today, selected)
+    payload = _load_snapshot(today)
+
+    if alert:
+        prev = _previous_snapshot(before=today)
+        if prev:
+            prev_date, prev_data = prev
+            changes = _diff_snapshots(prev_data, payload)
+            if changes:
+                msg = _format_pricing_diff(changes, prev_date, today)
+                try:
+                    await send_telegram(msg)
+                    logger.info(f"[pricing] sent drift alert: {len(changes)} changes")
+                except Exception as e:
+                    logger.warning(f"[pricing] alert send failed: {e}")
+            else:
+                logger.info(f"[pricing] no changes vs {prev_date}")
+        else:
+            logger.info(f"[pricing] first snapshot — no baseline for diff")
+
+    _rotate_pricing_snapshots()
+    return payload
+
+
+async def daily_pricing_snapshot() -> None:
+    """Background task. Wakes once a day at 00:30 KST and takes a snapshot.
+
+    Why 00:30 (not 00:00): the daily usage reporter fires at 00:01, leaving
+    a 29-minute buffer so we don't pile concurrent Telegrams on the user.
+    Also gives LiteLLM's GitHub source a moment to settle if they happen
+    to release on midnight UTC.
+    """
+    logger.info("Daily pricing snapshot scheduler started")
+    while True:
+        try:
+            now = _kst_now()
+            target = now.replace(hour=0, minute=30, second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
+            wait = (target - now).total_seconds()
+            await asyncio.sleep(wait)
+            await take_pricing_snapshot(alert=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[pricing] scheduler error: {e}")
+            await asyncio.sleep(300)  # back off 5 min on unexpected errors
+
+
 def _load_task_jsons() -> list[dict]:
     """Read every task JSON from the mounted AZ logs dir.
 
@@ -1775,6 +2120,99 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_pricing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """LiteLLM pricing snapshot inspection / on-demand refresh (issue #21).
+
+    Usage:
+      /pricing                — show latest snapshot summary
+      /pricing list           — list available snapshot dates
+      /pricing snapshot       — force a fresh snapshot now
+      /pricing diff           — diff latest two snapshots (no alert)
+    """
+    if update.effective_chat.id != CHAT_ID:
+        return
+    msg = update.effective_message
+    if msg is None:
+        return
+
+    args = list(context.args or [])
+    sub = args[0].lower() if args else "show"
+
+    if sub == "list":
+        snaps = _list_snapshots()
+        if not snaps:
+            await msg.reply_text("📂 저장된 가격 스냅샷이 없습니다. /pricing snapshot 으로 강제 생성 가능.")
+            return
+        # Show up to 14 most recent so the message stays readable.
+        head = snaps[:14]
+        lines = [f"📂 가격 스냅샷 ({len(snaps)}개, 최신 {len(head)}개 표시)"]
+        for d in head:
+            data = _load_snapshot(d) or {}
+            n = len(data.get("models") or {})
+            lines.append(f"  {d}: {n} 모델")
+        await msg.reply_text("\n".join(lines))
+        return
+
+    if sub == "snapshot":
+        await msg.reply_text("⏳ 가격 스냅샷 생성 중…")
+        result = await take_pricing_snapshot(force=True, alert=True)
+        if result is None:
+            await msg.reply_text("❌ 스냅샷 실패 — 로그 확인. (HTTP 또는 관심 모델 부재)")
+            return
+        n = len(result.get("models") or {})
+        await msg.reply_text(f"✅ 스냅샷 저장: {result['snapshot_date']} ({n} 모델)")
+        return
+
+    if sub == "diff":
+        snaps = _list_snapshots()
+        if len(snaps) < 2:
+            await msg.reply_text("⚠️ 비교할 스냅샷이 부족합니다 (2개 이상 필요).")
+            return
+        curr_date = snaps[0]
+        prev_date = snaps[1]
+        curr = _load_snapshot(curr_date) or {}
+        prev = _load_snapshot(prev_date) or {}
+        changes = _diff_snapshots(prev, curr)
+        if not changes:
+            await msg.reply_text(f"✅ 변동 없음 ({prev_date} → {curr_date})")
+            return
+        await msg.reply_text(_format_pricing_diff(changes, prev_date, curr_date))
+        return
+
+    # Default: show
+    snaps = _list_snapshots()
+    if not snaps:
+        await msg.reply_text(
+            "📂 저장된 스냅샷 없음.\n"
+            "  /pricing snapshot — 지금 강제 생성\n"
+            "  (자동 일정: 매일 00:30 KST)"
+        )
+        return
+    latest_date = snaps[0]
+    data = _load_snapshot(latest_date) or {}
+    models = data.get("models") or {}
+    lines = [
+        f"💱 최신 스냅샷: {latest_date}",
+        f"   {len(models)} 모델 · 다음 자동 실행: 00:30 KST",
+        "",
+    ]
+    for key in sorted(models.keys()):
+        info = models[key]
+        alias = (info.get("az_aliases") or [key])[0]
+        in_rate = info.get("input_cost_per_token") or 0
+        out_rate = info.get("output_cost_per_token") or 0
+        cr_rate = info.get("cache_read_input_token_cost") or 0
+        # Per-1M tokens for human readability.
+        lines.append(
+            f"  {alias}\n"
+            f"    in ${in_rate * 1e6:.2f}/1M · out ${out_rate * 1e6:.2f}/1M"
+            f"{' · cache_read $' + format(cr_rate * 1e6, '.2f') + '/1M' if cr_rate else ''}"
+        )
+    lines.append("")
+    lines.append("/pricing list  · /pricing diff  · /pricing snapshot")
+    await msg.reply_text("\n".join(lines))
+
+
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """토큰 사용량 + 비용 조회 (cache 토큰 포함)"""
     if update.effective_chat.id != CHAT_ID:
@@ -1884,6 +2322,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /week → 최근 7일 일별 + 합계\n"
         "  /tasks [N] → 최근 N개 태스크 목록 (기본 10)\n"
         "  /budget [day|week] [USD] → 예산 한도 + 자동 알림\n"
+        "  /pricing [list|diff|snapshot] → LiteLLM 가격 스냅샷 + drift\n"
         "  /backup → 설정 경량 백업 (ZIP 파일 전송)\n"
         "  /help → 도움말"
     )
@@ -2013,7 +2452,9 @@ async def post_init(application: Application):
     # M5-A: hourly budget sweep — defensive double-check on top of the
     # per-/track call (issue #19).
     asyncio.create_task(hourly_budget_sweep())
-    logger.info("Monitor + daily reporter + budget sweep tasks created")
+    # M5-C: daily 00:30 KST pricing snapshot + drift detection (issue #21).
+    asyncio.create_task(daily_pricing_snapshot())
+    logger.info("Monitor + daily reporter + budget sweep + pricing snapshot tasks created")
 
 
 def main():
@@ -2039,6 +2480,7 @@ def main():
     app.add_handler(CommandHandler("week", cmd_week))
     app.add_handler(CommandHandler("tasks", cmd_tasks))
     app.add_handler(CommandHandler("budget", cmd_budget))
+    app.add_handler(CommandHandler("pricing", cmd_pricing))
     app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
