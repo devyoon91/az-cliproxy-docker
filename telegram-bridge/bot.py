@@ -536,10 +536,11 @@ async def check_agent_zero_status() -> str:
             if resp.status != 200:
                 return f"Agent Zero: 응답 코드 {resp.status}"
 
-        # 설정 조회 (프로필, 모델 정보)
+        # 설정 조회 — AZ v1.9 의 /api/settings_get 은
+        #   {"settings": {...}, "additional": {...}}
+        # 형태로 한 단계 wrapping 되어 응답합니다. 이전 코드는 최상위에서
+        # 키를 읽어 늘 "알 수 없음" 으로 나왔던 버그를 unwrap 으로 수정.
         profile = "알 수 없음"
-        chat_model = "알 수 없음"
-        util_model = "알 수 없음"
         try:
             async with session.post(
                 f"{AZ_API_URL}{AZ_API_PREFIX}/settings_get",
@@ -548,12 +549,34 @@ async def check_agent_zero_status() -> str:
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as settings_resp:
                 if settings_resp.status == 200:
-                    settings = await settings_resp.json()
-                    profile = settings.get("agent_profile", "알 수 없음")
-                    chat_model = settings.get("chat_model_name", "알 수 없음")
-                    util_model = settings.get("util_model_name", "알 수 없음")
-        except Exception:
-            pass
+                    payload = await settings_resp.json()
+                    inner = payload.get("settings") or payload  # tolerate older shape
+                    profile = inner.get("agent_profile") or "알 수 없음"
+        except Exception as e:
+            logger.debug(f"settings_get failed: {e}")
+
+        # 모델은 v1.9 에서 _model_config 플러그인으로 옮겨졌고 자체 API 가
+        # 있습니다 (/api/plugins/_model_config/model_config_get). 사용자 override
+        # 가 없으면 default_config.yaml 의 값이 돌아와서, AZ 내부 라우팅이
+        # 실제로 보고 있는 설정과 정확히 일치합니다.
+        chat_model, util_model = "알 수 없음", "알 수 없음"
+        try:
+            async with session.post(
+                f"{AZ_API_URL}{AZ_API_PREFIX}/plugins/_model_config/model_config_get",
+                json={"agent_profile": profile if profile != "알 수 없음" else ""},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as mc_resp:
+                if mc_resp.status == 200:
+                    mc = (await mc_resp.json()).get("config") or {}
+                    cm = mc.get("chat_model") or {}
+                    um = mc.get("utility_model") or {}
+                    if cm.get("name"):
+                        chat_model = cm["name"]
+                    if um.get("name"):
+                        util_model = um["name"]
+        except Exception as e:
+            logger.debug(f"model_config_get failed: {e}")
 
         ctx_short = monitor_context[:8] + "..." if monitor_context else "없음"
         return (
