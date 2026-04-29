@@ -86,6 +86,85 @@ def _short_id(ctx_id: str | None, max_len: int = 12) -> str:
         return ctx_id
     return ctx_id[:max_len] + "..."
 
+
+# ── Monitor message streaming state ──
+# Per AZ context, track the last Telegram message we sent for the active
+# AZ "turn" so subsequent log entries from the same turn extend that message
+# (via editMessageText) instead of arriving as separate Telegram messages.
+# An AZ turn typically emits 5–7 logs (info → tool → code_exe → tool result
+# → response); without this, every poll cycle's logs went out as their own
+# message, producing visual fragmentation.
+#
+# Boundaries (when to stop editing and start a new message):
+#   • A `user`-type log appears in the poll batch — that's a new turn
+#   • Telegram's 4096-char limit hit — close current, open next
+#   • Active chat switches (/switch, /new, monitor auto-follow)
+#   • Edit fails for any non-recoverable reason — fall back to send-new
+streaming_msg_id: dict[str, int] = {}   # ctx_key → Telegram message_id
+streaming_text: dict[str, str] = {}     # ctx_key → text we last sent/edited
+
+# Telegram's hard cap is 4096 chars; leave headroom for the next chunk join
+# and any sneaky widening from formatter changes.
+STREAM_MAX_CHARS = 3800
+
+
+def _stream_reset(ctx_key: str) -> None:
+    """Forget the active streamed message for `ctx_key`. Next chunk will
+    send a brand-new Telegram message. Safe to call when no state exists."""
+    streaming_msg_id.pop(ctx_key, None)
+    streaming_text.pop(ctx_key, None)
+
+
+async def _stream_extend(ctx_key: str, new_chunk: str) -> None:
+    """Append `new_chunk` to the active streamed message — editing it
+    in place. Falls back to a brand-new send when:
+      • There's no active message yet
+      • The edit would push past STREAM_MAX_CHARS (so we close + reopen)
+      • Telegram refuses the edit (message too old, deleted, etc.)
+    """
+    if not new_chunk or tg_bot is None:
+        return
+
+    cur_text = streaming_text.get(ctx_key, "")
+    cur_msg_id = streaming_msg_id.get(ctx_key)
+    sep = "\n\n" if cur_text else ""
+    extended = cur_text + sep + new_chunk
+
+    # Length cap — finalize current message, start a fresh one with new_chunk.
+    if cur_msg_id and len(extended) > STREAM_MAX_CHARS:
+        cur_msg_id = None
+        cur_text = ""
+        extended = new_chunk
+
+    if cur_msg_id:
+        try:
+            await tg_bot.edit_message_text(
+                chat_id=CHAT_ID,
+                message_id=cur_msg_id,
+                text=extended,
+            )
+            streaming_text[ctx_key] = extended
+            return
+        except Exception as e:
+            # "Message is not modified" is a no-op success; everything else
+            # means the message can't be edited (too old / deleted / rate
+            # limit). Drop state and fall through to send-new — better the
+            # user gets a fresh message than no update at all.
+            err = str(e).lower()
+            if "not modified" in err:
+                return
+            logger.debug(f"[stream] edit failed for {ctx_key!r}: {e}; sending new")
+            _stream_reset(ctx_key)
+
+    # Send-new path (also taken when length cap forced a fresh message).
+    try:
+        msg = await tg_bot.send_message(chat_id=CHAT_ID, text=new_chunk)
+        streaming_msg_id[ctx_key] = msg.message_id
+        streaming_text[ctx_key] = new_chunk
+    except Exception as e:
+        logger.error(f"[stream] send failed: {e}")
+
+
 # ── 토큰 사용량 추적 ──
 usage_today: dict = {
     "date": _kst_now().strftime("%Y-%m-%d"),
@@ -420,6 +499,10 @@ async def monitor_agent_zero():
             if monitor_auto_follow and new_context and new_context != monitor_context:
                 old_ctx = _short_id(monitor_context)
                 new_ctx = _short_id(new_context)
+                # Drop the in-progress stream tied to the old chat — the
+                # 채팅 전환 알림 is itself a fresh standalone message and
+                # the new chat's logs should start their own stream.
+                _stream_reset(monitor_context or "_default")
                 await send_telegram(f"🔄 채팅 전환 감지: {old_ctx} → {new_ctx}")
                 monitor_context = new_context
                 monitor_log_guid = new_log_guid
@@ -438,6 +521,18 @@ async def monitor_agent_zero():
             logs = poll_data.get("logs", [])
 
             if logs:
+                # Stream logs into ONE Telegram message per AZ "turn" — see
+                # streaming_msg_id docstring above. We batch this poll's logs
+                # and either edit the active message or open a new one.
+                # A `user`-type log mid-batch marks a new turn boundary.
+                stream_key = monitor_context or "_default"
+                pending: list[str] = []
+
+                async def flush_pending():
+                    if pending:
+                        await _stream_extend(stream_key, "\n\n".join(pending))
+                        pending.clear()
+
                 for log in logs:
                     log_type = log.get("type", "")
                     heading = log.get("heading", "")
@@ -447,10 +542,17 @@ async def monitor_agent_zero():
                     if temp:
                         continue
 
-                    msg = format_monitor_message(log_type, heading, content)
-                    if msg:
-                        await send_telegram(msg)
+                    if log_type == "user":
+                        # Push prior pieces to the previous turn's message,
+                        # then close that stream so the user line opens fresh.
+                        await flush_pending()
+                        _stream_reset(stream_key)
 
+                    formatted = format_monitor_message(log_type, heading, content)
+                    if formatted:
+                        pending.append(formatted)
+
+                await flush_pending()
                 monitor_log_version = new_log_version
 
         except asyncio.CancelledError:
@@ -699,6 +801,9 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_id = target.get("id", "")
     target_name = target.get("name", "이름 없음")
 
+    # Close any in-progress stream tied to the previous chat before swapping.
+    _stream_reset(monitor_context or "_default")
+
     az_context = target_id
     monitor_context = target_id
     monitor_log_guid = ""
@@ -761,6 +866,10 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not new_ctxid:
         await msg.reply_text("⚠️ 새 대화 생성 실패 — Agent Zero 응답 확인 필요.")
         return
+
+    # Close any in-progress stream from the previous chat — new chat's logs
+    # should open their own message, not extend the old one.
+    _stream_reset(monitor_context or "_default")
 
     az_context = new_ctxid
     monitor_context = new_ctxid
