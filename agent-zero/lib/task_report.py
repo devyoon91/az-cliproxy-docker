@@ -263,6 +263,23 @@ def tool_start(agent, tool_name: str, tool_args) -> None:
         "_started_ts": time.time(),
     }
 
+    # AZ's `response` tool args carry the user-facing answer text (the
+    # message the agent wrote back). Capture it here at full length —
+    # `args_preview` is truncated to ~120 chars for the JSON, but the
+    # task summary card wants the whole thing. Last call wins so re-asks
+    # within one task end up with the final answer in the summary.
+    if tool_name == "response":
+        try:
+            text = None
+            if isinstance(tool_args, dict):
+                text = tool_args.get("text") or tool_args.get("message")
+            if isinstance(text, str) and text.strip():
+                r = get_report(agent)
+                if r is not None:
+                    r["final_response"] = text
+        except Exception as e:
+            logger.debug(f"[task_report] response capture failed: {e}")
+
 
 def tool_end(agent, tool_name: str, response) -> None:
     r = get_report(agent)
@@ -461,6 +478,11 @@ def _format_task_summary(snapshot: dict) -> str:
 
     Shown on `monologue_end` after `finish_task` writes the final JSON.
     Opt out with env var `AZ_TASK_SUMMARY=0`.
+
+    When the task ended with a `response` tool call (AZ's user-facing
+    answer), the message text is prepended so the user can read the
+    answer directly in the summary card without scrolling back through
+    the streamed monitor message.
     """
     totals = snapshot.get("totals") or {}
     elapsed = snapshot.get("elapsed_sec") or 0
@@ -481,11 +503,25 @@ def _format_task_summary(snapshot: dict) -> str:
         bucket["cache_create"] += c.get("cache_creation_tokens", 0) or 0
         bucket["cost"] += c.get("cost_usd", 0.0) or 0.0
 
-    lines = [
+    lines: list[str] = []
+
+    # Final answer first — that's what the user actually wants to read.
+    # Telegram caps messages at 4096 chars; reserve ~600 for the metrics
+    # block underneath so a long answer still leaves room.
+    final_response = snapshot.get("final_response")
+    if isinstance(final_response, str) and final_response.strip():
+        text = final_response.strip()
+        budget = 4096 - 600
+        if len(text) > budget:
+            text = text[:budget].rstrip() + "\n…(생략)"
+        lines.append(f"🤖 {text}")
+        lines.append("")  # blank line separates answer from metrics
+
+    lines.extend([
         f"✅ 태스크 완료 ({snapshot.get('task_id', '?')})",
         f"⏱ {elapsed:.1f}s  🔧 tools {totals.get('tool_calls', 0)}  💬 LLM {totals.get('llm_calls', 0)}",
         f"💰 ${cost_usd:.4f}",
-    ]
+    ])
     if by_model:
         for model, b in sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True):
             cache_part = (
