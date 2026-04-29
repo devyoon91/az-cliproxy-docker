@@ -3289,26 +3289,50 @@ async def webhook_handler(request):
         "text": "...",
         "markdown": true,        # optional — convert text from markdown to
                                  # Telegram-safe HTML before sending
-        "parse_mode": "HTML"     # optional — sent verbatim if you've
+        "parse_mode": "HTML",    # optional — sent verbatim if you've
                                  # already-formatted HTML/MarkdownV2
+        "kind": "task_response"  # optional — adds a UI prefix emoji
+                                 # AFTER markdown conversion so leading
+                                 # `## header` / `| table |` aren't
+                                 # displaced from line-start
       }
 
     `markdown: true` is the easy path: senders write plain markdown
     (```code```, **bold**, etc.) and the bridge handles conversion +
-    fallback to plain text on parse failure. AZ's task_report uses this.
+    fallback to plain text on parse failure. AZ's task_report uses this
+    with kind="task_response" so the 🤖 emoji lands AFTER conversion.
     """
+    # Map of `kind` → UI prefix emoji + space. Keep tiny; this is purely
+    # presentation. Empty/unknown kind → no prefix.
+    KIND_PREFIX = {
+        "task_response": "🤖 ",
+    }
     try:
         data = await request.json()
         raw_text = data.get("text", data.get("message", str(data)))
         parse_mode = data.get("parse_mode")
+        kind = data.get("kind")
+        prefix = KIND_PREFIX.get(kind, "")
+
         if data.get("markdown"):
+            # Convert THEN prefix — order matters. If we prefixed first,
+            # leading "## header" would no longer be at line-start, breaking
+            # the converter's `^#` regex. Same goes for table rows
+            # starting with `|`.
+            converted = md_to_telegram_html(raw_text)
+            if prefix:
+                converted = f"{prefix}{converted}"
+                fallback = f"{prefix}{raw_text}"
+            else:
+                fallback = raw_text
             await send_telegram(
-                md_to_telegram_html(raw_text),
+                converted,
                 parse_mode="HTML",
-                fallback_text=raw_text,
+                fallback_text=fallback,
             )
         else:
-            await send_telegram(raw_text, parse_mode=parse_mode)
+            text = f"{prefix}{raw_text}" if prefix else raw_text
+            await send_telegram(text, parse_mode=parse_mode)
         return web.json_response({"ok": True})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)

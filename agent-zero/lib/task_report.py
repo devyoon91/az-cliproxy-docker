@@ -474,13 +474,22 @@ TASK_SUMMARY_ENABLED = os.environ.get("AZ_TASK_SUMMARY", "1") not in ("0", "fals
 
 
 def _format_task_response(snapshot: dict) -> str | None:
-    """The user-facing answer text captured from the `response` tool, formatted
-    for Telegram. Returns None when no answer was captured (cancelled task,
-    error path, no response tool fired) so the caller can skip the post.
+    """Return the raw answer text captured from the `response` tool.
 
-    Telegram caps messages at 4096; truncate with `…(생략)` to stay safely
-    under that. The summary card is its OWN separate message, so this one
-    can use almost the full budget.
+    Returns None when nothing was captured (cancelled task, error path,
+    or task ended without a response tool firing) so the caller can
+    skip the post.
+
+    The 🤖 emoji prefix is intentionally NOT added here — the bridge
+    prepends it AFTER markdown conversion. If we glued "🤖 " on the
+    front before conversion, a leading `## header` would no longer be
+    at line-start (it'd be after "🤖 ") and the converter's
+    `^#{1,6}` regex would miss it. Apply prefix post-conversion so
+    line-anchored markdown rules still match.
+
+    Telegram caps messages at 4096; truncate with `…(생략)`. Reserve
+    ~150 chars to absorb both the bridge-prepended emoji and any
+    HTML expansion from the converter.
     """
     final_response = snapshot.get("final_response")
     if not isinstance(final_response, str):
@@ -488,10 +497,10 @@ def _format_task_response(snapshot: dict) -> str | None:
     text = final_response.strip()
     if not text:
         return None
-    budget = 4096 - 100  # tiny margin for the 🤖 prefix + safety
+    budget = 4096 - 150
     if len(text) > budget:
         text = text[:budget].rstrip() + "\n…(생략)"
-    return f"🤖 {text}"
+    return text
 
 
 def _format_task_summary(snapshot: dict) -> str:
@@ -541,7 +550,7 @@ def _format_task_summary(snapshot: dict) -> str:
     return "\n".join(lines)
 
 
-def _post(text: str, markdown: bool = False) -> None:
+def _post(text: str, markdown: bool = False, kind: str | None = None) -> None:
     """Fire-and-forget POST to the Telegram bridge /notify endpoint.
     Failure is intentionally swallowed (debug log only) — a notification
     glitch must never crash the monologue shutdown path.
@@ -551,6 +560,12 @@ def _post(text: str, markdown: bool = False) -> None:
     (not pre-converted HTML) so the conversion logic stays in one place
     and we don't hard-code AZ's task_report against Telegram's HTML
     flavor.
+
+    `kind` is a free-form hint to the bridge (e.g. "task_response").
+    The bridge uses it to decide which UI prefix emoji to prepend
+    AFTER markdown conversion — required so leading line-anchored
+    markdown (`## header`, `| table |`) at the start of the body
+    isn't displaced by a "🤖 " prefix that breaks the regex.
     """
     try:
         import requests  # local import so we don't pay the cost on happy-path imports
@@ -559,6 +574,8 @@ def _post(text: str, markdown: bool = False) -> None:
     payload = {"text": text}
     if markdown:
         payload["markdown"] = True
+    if kind:
+        payload["kind"] = kind
     try:
         requests.post(TELEGRAM_BRIDGE_NOTIFY_URL, json=payload, timeout=3)
     except Exception as e:
@@ -581,10 +598,12 @@ def _post_task_response(snapshot: dict) -> None:
     text = _format_task_response(snapshot)
     if text is None:
         return
-    # Answer text often contains markdown (```code```, **bold**, etc).
-    # Bridge converts to Telegram HTML and falls back to plain text on
-    # parse error, so the user never gets a worse experience than today.
-    _post(text, markdown=True)
+    # Answer text often contains markdown (```code```, **bold**, ## header,
+    # tables, etc). Bridge converts to Telegram HTML, prepends the 🤖 emoji
+    # AFTER conversion (so leading `## header` etc. isn't displaced from
+    # line-start), and falls back to plain text on parse error — user
+    # never gets a worse experience than today.
+    _post(text, markdown=True, kind="task_response")
 
 
 def _post_task_summary(snapshot: dict) -> None:
