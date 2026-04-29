@@ -541,16 +541,26 @@ def _format_task_summary(snapshot: dict) -> str:
     return "\n".join(lines)
 
 
-def _post(text: str) -> None:
+def _post(text: str, markdown: bool = False) -> None:
     """Fire-and-forget POST to the Telegram bridge /notify endpoint.
     Failure is intentionally swallowed (debug log only) — a notification
-    glitch must never crash the monologue shutdown path."""
+    glitch must never crash the monologue shutdown path.
+
+    `markdown=True` asks the bridge to convert markdown (code fences,
+    bold, etc.) to Telegram-safe HTML on its end. We send raw markdown
+    (not pre-converted HTML) so the conversion logic stays in one place
+    and we don't hard-code AZ's task_report against Telegram's HTML
+    flavor.
+    """
     try:
         import requests  # local import so we don't pay the cost on happy-path imports
     except Exception:
         return
+    payload = {"text": text}
+    if markdown:
+        payload["markdown"] = True
     try:
-        requests.post(TELEGRAM_BRIDGE_NOTIFY_URL, json={"text": text}, timeout=3)
+        requests.post(TELEGRAM_BRIDGE_NOTIFY_URL, json=payload, timeout=3)
     except Exception as e:
         logger.debug(f"[task_report] notify post failed: {e}")
 
@@ -571,7 +581,10 @@ def _post_task_response(snapshot: dict) -> None:
     text = _format_task_response(snapshot)
     if text is None:
         return
-    _post(text)
+    # Answer text often contains markdown (```code```, **bold**, etc).
+    # Bridge converts to Telegram HTML and falls back to plain text on
+    # parse error, so the user never gets a worse experience than today.
+    _post(text, markdown=True)
 
 
 def _post_task_summary(snapshot: dict) -> None:
