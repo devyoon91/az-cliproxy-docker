@@ -126,6 +126,8 @@ def md_to_telegram_html(text: str) -> str:
     )
 
     # Step 2: ```lang\n...\n``` fenced code blocks.
+    # Run FIRST so the inner content (which may contain | or # chars) isn't
+    # touched by the table / header rules below.
     def _fence(m):
         lang = m.group(1) or ""
         body = m.group(2).rstrip("\n")
@@ -140,14 +142,38 @@ def md_to_telegram_html(text: str) -> str:
         flags=_re_md_to_html.DOTALL,
     )
 
-    # Step 3: `inline code`. Run AFTER fences so triple-backticks aren't
+    # Step 3: Markdown tables → <pre> blocks.
+    # Telegram has no <table> tag, but <pre> renders monospace, so the
+    # original `|` separators become a visually aligned ASCII table —
+    # which is the closest we can get. Strip the GitHub-style separator
+    # row (`|---|---|`) since it adds no value in monospace.
+    def _table(m):
+        block = m.group(0).strip("\n")
+        kept = []
+        for line in block.split("\n"):
+            stripped = line.strip()
+            # Skip the separator-only row, e.g. "|---|---|" or "| --- | :-: |"
+            if _re_md_to_html.match(r"^\|?\s*[-:|\s]+\|?\s*$", stripped):
+                continue
+            kept.append(line)
+        return "<pre>" + "\n".join(kept) + "</pre>"
+
+    out = _re_md_to_html.sub(
+        # Two or more consecutive lines starting with optional spaces + `|`.
+        r"(?:^[ \t]*\|.+(?:\n|$)){2,}",
+        _table,
+        out,
+        flags=_re_md_to_html.MULTILINE,
+    )
+
+    # Step 4: `inline code`. Run AFTER fences so triple-backticks aren't
     # eaten as three single-backtick spans.
     out = _re_md_to_html.sub(r"`([^`\n]+?)`", r"<code>\1</code>", out)
 
-    # Step 4: **bold** (must run before *italic* so ** doesn't match as two *)
+    # Step 5: **bold** (must run before *italic* so ** doesn't match as two *)
     out = _re_md_to_html.sub(r"\*\*([^*\n]+?)\*\*", r"<b>\1</b>", out)
 
-    # Step 5: *italic* — guard with negative lookarounds to avoid eating
+    # Step 6: *italic* — guard with negative lookarounds to avoid eating
     # asterisks already inside <b>...</b> bursts.
     out = _re_md_to_html.sub(
         r"(?<![*\w])\*([^*\n]+?)\*(?!\w)",
@@ -155,12 +181,30 @@ def md_to_telegram_html(text: str) -> str:
         out,
     )
 
-    # Step 6: [text](url). The `&` in URL would have been HTML-escaped to
+    # Step 7: [text](url). The `&` in URL would have been HTML-escaped to
     # &amp; in step 1; that's actually correct in href values.
     out = _re_md_to_html.sub(
         r"\[([^\]]+?)\]\((https?://[^\s)]+)\)",
         r'<a href="\2">\1</a>',
         out,
+    )
+
+    # Step 8: ATX headers `# heading` … `###### heading` → <b>heading</b>.
+    # Telegram has no header tag; bold is the closest visual proxy.
+    # Run AFTER all inline rules so a header like `## **important**` —
+    # which becomes `## <b>important</b>` after step 5 — gets the inner
+    # <b>...</b> stripped here before re-wrapping. Otherwise we'd end
+    # up with `<b><b>important</b></b>` (Telegram tolerates it but it's noise).
+    def _header(m):
+        body = m.group(1).strip()
+        body = body.replace("<b>", "").replace("</b>", "")
+        return f"<b>{body}</b>"
+
+    out = _re_md_to_html.sub(
+        r"^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*$",
+        _header,
+        out,
+        flags=_re_md_to_html.MULTILINE,
     )
 
     return out
