@@ -473,16 +473,36 @@ TELEGRAM_BRIDGE_NOTIFY_URL = os.environ.get(
 TASK_SUMMARY_ENABLED = os.environ.get("AZ_TASK_SUMMARY", "1") not in ("0", "false", "False")
 
 
+def _format_task_response(snapshot: dict) -> str | None:
+    """The user-facing answer text captured from the `response` tool, formatted
+    for Telegram. Returns None when no answer was captured (cancelled task,
+    error path, no response tool fired) so the caller can skip the post.
+
+    Telegram caps messages at 4096; truncate with `…(생략)` to stay safely
+    under that. The summary card is its OWN separate message, so this one
+    can use almost the full budget.
+    """
+    final_response = snapshot.get("final_response")
+    if not isinstance(final_response, str):
+        return None
+    text = final_response.strip()
+    if not text:
+        return None
+    budget = 4096 - 100  # tiny margin for the 🤖 prefix + safety
+    if len(text) > budget:
+        text = text[:budget].rstrip() + "\n…(생략)"
+    return f"🤖 {text}"
+
+
 def _format_task_summary(snapshot: dict) -> str:
-    """Compact Telegram-friendly per-task summary.
+    """Compact metrics card for a completed task.
 
     Shown on `monologue_end` after `finish_task` writes the final JSON.
-    Opt out with env var `AZ_TASK_SUMMARY=0`.
+    The user-facing answer text is sent as a SEPARATE Telegram message
+    immediately before this card (see `_format_task_response`) so the
+    chat reads as: 🤖 answer → ✅ summary, two clean messages.
 
-    When the task ended with a `response` tool call (AZ's user-facing
-    answer), the message text is prepended so the user can read the
-    answer directly in the summary card without scrolling back through
-    the streamed monitor message.
+    Opt out with env var `AZ_TASK_SUMMARY=0`.
     """
     totals = snapshot.get("totals") or {}
     elapsed = snapshot.get("elapsed_sec") or 0
@@ -503,25 +523,11 @@ def _format_task_summary(snapshot: dict) -> str:
         bucket["cache_create"] += c.get("cache_creation_tokens", 0) or 0
         bucket["cost"] += c.get("cost_usd", 0.0) or 0.0
 
-    lines: list[str] = []
-
-    # Final answer first — that's what the user actually wants to read.
-    # Telegram caps messages at 4096 chars; reserve ~600 for the metrics
-    # block underneath so a long answer still leaves room.
-    final_response = snapshot.get("final_response")
-    if isinstance(final_response, str) and final_response.strip():
-        text = final_response.strip()
-        budget = 4096 - 600
-        if len(text) > budget:
-            text = text[:budget].rstrip() + "\n…(생략)"
-        lines.append(f"🤖 {text}")
-        lines.append("")  # blank line separates answer from metrics
-
-    lines.extend([
+    lines = [
         f"✅ 태스크 완료 ({snapshot.get('task_id', '?')})",
         f"⏱ {elapsed:.1f}s  🔧 tools {totals.get('tool_calls', 0)}  💬 LLM {totals.get('llm_calls', 0)}",
         f"💰 ${cost_usd:.4f}",
-    ])
+    ]
     if by_model:
         for model, b in sorted(by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True):
             cache_part = (
@@ -535,19 +541,47 @@ def _format_task_summary(snapshot: dict) -> str:
     return "\n".join(lines)
 
 
-def _post_task_summary(snapshot: dict) -> None:
-    if not TASK_SUMMARY_ENABLED:
-        return
+def _post(text: str) -> None:
+    """Fire-and-forget POST to the Telegram bridge /notify endpoint.
+    Failure is intentionally swallowed (debug log only) — a notification
+    glitch must never crash the monologue shutdown path."""
     try:
         import requests  # local import so we don't pay the cost on happy-path imports
     except Exception:
         return
     try:
-        text = _format_task_summary(snapshot)
         requests.post(TELEGRAM_BRIDGE_NOTIFY_URL, json={"text": text}, timeout=3)
     except Exception as e:
-        # Never let notification failure impact the monologue shutdown.
-        logger.debug(f"[task_report] summary post failed: {e}")
+        logger.debug(f"[task_report] notify post failed: {e}")
+
+
+def _post_task_response(snapshot: dict) -> None:
+    """Send AZ's user-facing answer as its own Telegram message.
+
+    Sent BEFORE the metrics card so the user reads:
+       🤖 [answer]            ← this post
+       ✅ 태스크 완료 + 메트릭   ← the next post (_post_task_summary)
+
+    No-op when no `response` tool fired during the task (cancelled, error,
+    or task ended via a different break path) — caller's summary card
+    still goes out.
+    """
+    if not TASK_SUMMARY_ENABLED:
+        return
+    text = _format_task_response(snapshot)
+    if text is None:
+        return
+    _post(text)
+
+
+def _post_task_summary(snapshot: dict) -> None:
+    if not TASK_SUMMARY_ENABLED:
+        return
+    try:
+        text = _format_task_summary(snapshot)
+        _post(text)
+    except Exception as e:
+        logger.debug(f"[task_report] summary format failed: {e}")
 
 
 def finish_task(agent) -> dict | None:
@@ -576,6 +610,11 @@ def finish_task(agent) -> dict | None:
             summary_snapshot["elapsed_sec"] = round(time.time() - started_ts, 3)
         summary_snapshot.pop("started_ts", None)
         summary_snapshot["totals"] = _compute_totals(summary_snapshot)
+        # Two messages, in order: AZ's actual answer, then the metrics card.
+        # Bridge's monitor stays silent during the task (see bot.py
+        # format_monitor_message), so these two posts are the user's whole
+        # task-completion notification — no in-progress streaming noise.
+        _post_task_response(summary_snapshot)
         _post_task_summary(summary_snapshot)
     finally:
         agent.data.pop(DATA_KEY, None)

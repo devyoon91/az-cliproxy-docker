@@ -59,6 +59,13 @@ monitor_log_version = 0
 monitor_context = ""
 monitor_log_guid = ""
 monitor_auto_follow = True  # 웹에서 활성 채팅 변경 시 자동 추적
+# When False (the default), only `user` log types echo through to Telegram
+# during a task — AZ's intermediate activity (info/tool/code_exe/response/
+# error/warning) is suppressed. The user instead gets two clean messages
+# at task completion: AZ's answer + the metrics card (driven from
+# task_report.py). When True, every log type passes through unchanged for
+# debugging. Toggled via /verbose_on, /verbose_off.
+monitor_verbose = False
 
 # Telegram Bot 인스턴스 (모니터에서 사용)
 tg_bot: Bot | None = None
@@ -566,13 +573,29 @@ async def monitor_agent_zero():
 
 
 def format_monitor_message(log_type: str, heading: str, content: str) -> str | None:
-    """로그 타입에 따라 Telegram 메시지 포맷"""
+    """로그 타입에 따라 Telegram 메시지 포맷.
+
+    Quiet mode (default, `monitor_verbose=False`): only `user` log types
+    echo through. The user-facing answer + metrics card are sent at task
+    completion via `task_report.py`'s `_post_task_response` /
+    `_post_task_summary`, so the in-progress monitor doesn't need to
+    repeat what's coming anyway.
+
+    Verbose mode (`monitor_verbose=True`, toggled via /verbose_on): every
+    log type formats and forwards as before — useful when debugging an
+    AZ profile or a stuck task.
+    """
     if not content and not heading:
         return None
 
     if log_type == "user":
         return f"👤 사용자: {content}"
-    elif log_type in ("response", "ai", "agent"):
+
+    if not monitor_verbose:
+        # Quiet path — let task completion drive the actual answer + metrics.
+        return None
+
+    if log_type in ("response", "ai", "agent"):
         if len(content) > 2000:
             content = content[:2000] + "\n...(생략)"
         return f"🤖 Agent Zero:\n{content}"
@@ -3029,6 +3052,31 @@ async def cmd_track_chat_off(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+async def cmd_verbose_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show every AZ log (info/tool/code_exe/response/error/warning) during
+    a task — useful when debugging a stuck profile. Default-quiet behavior
+    (only user echoes + task-completion summary) is the normal mode."""
+    global monitor_verbose
+    if update.effective_chat.id != CHAT_ID:
+        return
+    monitor_verbose = True
+    await update.message.reply_text(
+        "🔊 상세 모니터 켜짐: AZ 활동 로그(도구/코드/info 등) 모두 텔레그램으로 전송."
+    )
+
+
+async def cmd_verbose_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Return to quiet mode — only user echoes during task, completion-time
+    answer + metrics card from task_report."""
+    global monitor_verbose
+    if update.effective_chat.id != CHAT_ID:
+        return
+    monitor_verbose = False
+    await update.message.reply_text(
+        "🔇 상세 모니터 꺼짐: 진행 중엔 조용, 완료 시 답변+메트릭만."
+    )
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != CHAT_ID:
         return
@@ -3047,7 +3095,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /monitor_on → 웹 채팅 알림 켜기 (현재 시점부터)\n"
         "  /monitor_off → 웹 채팅 알림 끄기\n"
         "  /track_chat_on → 채팅 자동 추적 켜기 (웹 UI 채팅 전환 따라감)\n"
-        "  /track_chat_off → 채팅 자동 추적 끄기 (현재 채팅 고정)\n\n"
+        "  /track_chat_off → 채팅 자동 추적 끄기 (현재 채팅 고정)\n"
+        "  /verbose_on → 진행 중 AZ 활동 로그도 보기 (디버그용)\n"
+        "  /verbose_off → 진행 중엔 조용히, 완료 시만 알림 (기본)\n\n"
         "상태/비용:\n"
         "  /status → Agent Zero 상태 확인\n"
         "  /usage → 세션 내 토큰/비용 (bridge 재시작 시 초기화)\n"
@@ -3230,6 +3280,9 @@ def main():
     # are AZ→Telegram concerns, /track_chat picks WHICH chat to watch).
     app.add_handler(CommandHandler("track_chat_on", cmd_track_chat_on))
     app.add_handler(CommandHandler("track_chat_off", cmd_track_chat_off))
+    # Verbose mode — show every AZ activity log instead of just user echoes.
+    app.add_handler(CommandHandler("verbose_on", cmd_verbose_on))
+    app.add_handler(CommandHandler("verbose_off", cmd_verbose_off))
     # Legacy aliases — old names still work for muscle memory / saved scripts.
     # Drop these after a transition window if desired.
     app.add_handler(CommandHandler("follow_on", cmd_track_chat_on))
