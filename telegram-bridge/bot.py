@@ -94,6 +94,78 @@ def _short_id(ctx_id: str | None, max_len: int = 12) -> str:
     return ctx_id[:max_len] + "..."
 
 
+# ── Markdown → Telegram HTML rendering ──
+# Telegram supports a SUBSET of HTML for parse_mode="HTML": <b>, <i>, <u>,
+# <s>, <code>, <pre>, <a>, <blockquote>, <tg-spoiler>. Notably it rejects
+# <p>, <ul>, <li>, <h1>, <div>, etc. — so a generic markdown library
+# (e.g. python-markdown) won't work out of the box. This is a small
+# purpose-built converter covering what AZ actually emits in answers:
+#   ```code blocks```, `inline code`, **bold**, *italic*, [text](url)
+# Anything else falls through as HTML-escaped plain text.
+import re as _re_md_to_html  # alias to avoid clashing with other re imports
+
+
+def md_to_telegram_html(text: str) -> str:
+    """Convert simple markdown to Telegram-safe HTML.
+
+    HTML-escapes everything first so untrusted content can't inject
+    arbitrary tags, then selectively rewrites known markdown markers
+    to the matching Telegram tag. Order matters — code blocks are
+    handled before inline code, **bold** before *italic*, so the
+    longer pattern always wins.
+    """
+    if not text:
+        return ""
+    # Step 1: full HTML escape — protects against tag injection AND lets
+    # us safely inject our own tags below since `<`/`>` from user content
+    # are already neutralized.
+    out = (
+        text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+    )
+
+    # Step 2: ```lang\n...\n``` fenced code blocks.
+    def _fence(m):
+        lang = m.group(1) or ""
+        body = m.group(2).rstrip("\n")
+        if lang:
+            return f'<pre><code class="language-{lang}">{body}</code></pre>'
+        return f"<pre>{body}</pre>"
+
+    out = _re_md_to_html.sub(
+        r"```(\w*)\n?(.*?)```",
+        _fence,
+        out,
+        flags=_re_md_to_html.DOTALL,
+    )
+
+    # Step 3: `inline code`. Run AFTER fences so triple-backticks aren't
+    # eaten as three single-backtick spans.
+    out = _re_md_to_html.sub(r"`([^`\n]+?)`", r"<code>\1</code>", out)
+
+    # Step 4: **bold** (must run before *italic* so ** doesn't match as two *)
+    out = _re_md_to_html.sub(r"\*\*([^*\n]+?)\*\*", r"<b>\1</b>", out)
+
+    # Step 5: *italic* — guard with negative lookarounds to avoid eating
+    # asterisks already inside <b>...</b> bursts.
+    out = _re_md_to_html.sub(
+        r"(?<![*\w])\*([^*\n]+?)\*(?!\w)",
+        r"<i>\1</i>",
+        out,
+    )
+
+    # Step 6: [text](url). The `&` in URL would have been HTML-escaped to
+    # &amp; in step 1; that's actually correct in href values.
+    out = _re_md_to_html.sub(
+        r"\[([^\]]+?)\]\((https?://[^\s)]+)\)",
+        r'<a href="\2">\1</a>',
+        out,
+    )
+
+    return out
+
+
 # ── Monitor message streaming state ──
 # Per AZ context, track the last Telegram message we sent for the active
 # AZ "turn" so subsequent log entries from the same turn extend that message
@@ -377,18 +449,59 @@ def get_headers() -> dict:
 
 
 # ── Telegram 메시지 전송 헬퍼 ──
-async def send_telegram(text: str):
-    """Telegram으로 메시지 전송 (길이 제한 처리)"""
+async def send_telegram(
+    text: str,
+    parse_mode: str | None = None,
+    fallback_text: str | None = None,
+):
+    """Send `text` to Telegram with optional `parse_mode` (HTML / Markdown).
+
+    `fallback_text` (recommended when parse_mode is set): a plain-text
+    version sent if Telegram rejects the formatted payload with a parse
+    error. Useful when AZ output produces malformed HTML/markdown despite
+    our converter — better the user gets the raw text than nothing.
+
+    Long messages (>4000 chars) are split. The fallback is only retried
+    for the chunk that actually failed parsing; other chunks aren't
+    re-sent so the user doesn't get duplicates.
+    """
     if not tg_bot or not text.strip():
         return
-    try:
-        if len(text) > 4000:
-            for i in range(0, len(text), 4000):
-                await tg_bot.send_message(chat_id=CHAT_ID, text=text[i : i + 4000])
-        else:
-            await tg_bot.send_message(chat_id=CHAT_ID, text=text)
-    except Exception as e:
-        logger.error(f"Telegram send failed: {e}")
+
+    chunks = (
+        [text[i : i + 4000] for i in range(0, len(text), 4000)]
+        if len(text) > 4000 else [text]
+    )
+    fallback_chunks = None
+    if fallback_text and len(text) > 4000:
+        fallback_chunks = [
+            fallback_text[i : i + 4000] for i in range(0, len(fallback_text), 4000)
+        ]
+
+    for idx, chunk in enumerate(chunks):
+        try:
+            await tg_bot.send_message(
+                chat_id=CHAT_ID, text=chunk, parse_mode=parse_mode
+            )
+        except Exception as e:
+            err = str(e).lower()
+            # Telegram returns "Bad Request: can't parse entities" on bad
+            # HTML/Markdown. Retry the SAME chunk in plain mode.
+            if parse_mode and ("can't parse" in err or "parse entities" in err):
+                fb = (
+                    fallback_chunks[idx] if fallback_chunks
+                    else (fallback_text if fallback_text and len(chunks) == 1 else chunk)
+                )
+                logger.warning(
+                    f"[telegram] parse_mode={parse_mode} rejected, "
+                    f"retrying chunk {idx} as plain"
+                )
+                try:
+                    await tg_bot.send_message(chat_id=CHAT_ID, text=fb)
+                except Exception as e2:
+                    logger.error(f"[telegram] plain fallback also failed: {e2}")
+            else:
+                logger.error(f"[telegram] send failed: {e}")
 
 
 # ── 채팅 목록 조회 ──
@@ -3125,11 +3238,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Notification & Usage webhook ──
 async def webhook_handler(request):
-    """HTTP POST로 알림 수신 → Telegram 전달"""
+    """HTTP POST → Telegram forwarding.
+
+    Payload:
+      {
+        "text": "...",
+        "markdown": true,        # optional — convert text from markdown to
+                                 # Telegram-safe HTML before sending
+        "parse_mode": "HTML"     # optional — sent verbatim if you've
+                                 # already-formatted HTML/MarkdownV2
+      }
+
+    `markdown: true` is the easy path: senders write plain markdown
+    (```code```, **bold**, etc.) and the bridge handles conversion +
+    fallback to plain text on parse failure. AZ's task_report uses this.
+    """
     try:
         data = await request.json()
-        text = data.get("text", data.get("message", str(data)))
-        await send_telegram(text)
+        raw_text = data.get("text", data.get("message", str(data)))
+        parse_mode = data.get("parse_mode")
+        if data.get("markdown"):
+            await send_telegram(
+                md_to_telegram_html(raw_text),
+                parse_mode="HTML",
+                fallback_text=raw_text,
+            )
+        else:
+            await send_telegram(raw_text, parse_mode=parse_mode)
         return web.json_response({"ok": True})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
