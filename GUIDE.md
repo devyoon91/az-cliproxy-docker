@@ -24,8 +24,7 @@
 14. [Telegram Bot 원격 제어](#14-telegram-bot-원격-제어)
 15. [팁: 호스트 파일시스템 접근](#15-팁-호스트-파일시스템-접근)
 16. [팁: 개인화 저장소 분리](#16-팁-개인화-저장소-분리)
-17. [팁: 외부 스킬 통합 (커뮤니티 SKILL.md 활용)](#17-팁-외부-스킬-통합-커뮤니티-skillmd-활용)
-18. [트러블슈팅](#18-트러블슈팅)
+17. [트러블슈팅](#17-트러블슈팅)
 
 ---
 
@@ -736,85 +735,7 @@ Agent Zero에게:
 
 ---
 
-## 17. 팁: 외부 스킬 통합 (커뮤니티 SKILL.md 활용)
-
-SKILL.md 표준은 멀티-툴 오픈 표준이라 외부 커뮤니티가 만든 스킬도 그대로 마운트 가능합니다.
-
-### 권장 외부 스킬: NomaDamas/k-skill
-
-[NomaDamas/k-skill](https://github.com/NomaDamas/k-skill)은 한국 특화 스킬 50+ 모음 (4,000+ stars). 한국 법령/HWP/뉴스/공시 등 한국 비즈니스 환경에 특화.
-
-#### 디렉토리 배치
-
-```
-parent/
-  ├── az-cliproxy-docker/     # 하네스 킷
-  ├── az-agent-config/        # 자체 개인화 저장소
-  └── k-skill/                # 외부 스킬 (NomaDamas)
-```
-
-#### 설치
-
-```bash
-cd /path/to/parent
-git clone https://github.com/NomaDamas/k-skill.git
-```
-
-#### docker-compose.yml 마운트 (필요한 스킬만 개별)
-
-```yaml
-# agent-zero 서비스의 volumes에 추가
-volumes:
-  # ── 자체 스킬 (az-agent-config) ──
-  - ../az-agent-config/skills:/a0/usr/skills:ro
-
-  # ── 외부 스킬 (k-skill) — 필요한 것만 ──
-  - ../k-skill/korean-law-search:/a0/usr/skills/korean-law-search:ro
-  - ../k-skill/hwp:/a0/usr/skills/hwp:ro
-  - ../k-skill/rhwp-edit:/a0/usr/skills/rhwp-edit:ro
-  - ../k-skill/rhwp-advanced:/a0/usr/skills/rhwp-advanced:ro
-```
-
-> **주의**: 자체 `skills/` 통째 마운트와 외부 개별 마운트는 같은 `/a0/usr/skills/` 경로 내에서 충돌 없이 공존합니다. 단, **외부 스킬은 반드시 개별 디렉토리 단위로 마운트**하세요. (k-skill 전체를 통째 마운트하면 50+ 스킬이 모두 로드되어 토큰/속도 부담)
-
-#### ECS Telecom 권장 외부 스킬
-
-| 스킬 | 우선순위 | 용도 |
-|------|:---:|------|
-| `korean-law-search` | 높음 | 한국 법령 동적 조회 (PIPA/금소법 등) |
-| `hwp` | 높음 | HWP/HWPX → Markdown 변환 (공공 RFP 분석) |
-| `rhwp-edit` | 중간 | HWP 산출물 작성/편집 |
-| `rhwp-advanced` | 중간 | HWP 레이아웃 디버깅 |
-| `naver-news-search` | 중간 | 시장/벤더 뉴스 (인텔리전스) |
-| `geeknews-search` | 중간 | 기술 트렌드 |
-| `k-dart` | 중간 | 전자공시 시스템 |
-
-#### 추가/제거 시
-
-```bash
-# docker-compose.yml 편집 후 재기동
-docker compose up -d agent-zero --force-recreate
-```
-
-### 주의사항
-
-- **외부 의존성**: 각 스킬이 자체 MCP 서버 / 외부 API 호출 (네트워크 필요)
-- **API Key**: 일부 스킬은 별도 API 키 필요 (네이버/카카오 등). 각 스킬의 SKILL.md `Prerequisites` 섹션 참조
-- **라이센스**: 대부분 MIT (개별 확인)
-- **유지보수**: 외부 팀이 관리하므로 자체 통제 안 됨
-
-### 자체 vs 외부 스킬 분담
-
-| 영역 | 담당 |
-|------|------|
-| ECS/ESP 도메인 (코드 리뷰/ESP 통계 등) | 자체 (`az-agent-config/skills/ecs-*`) |
-| 한국 법령 동적 조회 | 외부 (`k-skill/korean-law-search`) |
-| HWP 문서 처리 | 외부 (`k-skill/hwp` 시리즈) |
-| 한국 시장 뉴스 수집 | 외부 (`k-skill/naver-*`) |
-
----
-
-## 18. 트러블슈팅
+## 17. 트러블슈팅
 
 ### CLIProxy `mkdir: no such file or directory`
 
