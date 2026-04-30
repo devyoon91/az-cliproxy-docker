@@ -13,3 +13,5 @@
   - Git: `git config --get user.name`, `git config --get user.email`
   - Anthropic / OpenAI keys: `[ -n "$ANTHROPIC_API_KEY" ] && echo "key present"`
   Only ask the user when the value is actually missing.
+
+- The `response` tool's `text` argument is what the user receives **literally** (Telegram, web UI, etc). Never put placeholders, file references, or template directives (`§§include(...)`, `{{var}}`, `<file:...>`) in there expecting the runtime to dereference them — those only expand during system-prompt rendering, not in tool-call args. If you wrote the answer to a file (e.g. via `text_editor`), **read the file back and paste its contents into `response.text`**. If the answer is long, paste it anyway — the Telegram bridge handles truncation (`…(생략)` at ~3,900 chars) and markdown→HTML conversion. There is no "send this file" shortcut; the tool args are the wire format.
