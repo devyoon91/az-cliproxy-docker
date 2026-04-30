@@ -152,22 +152,37 @@ def compute_cost(
 ) -> float:
     """Compute total USD cost for one LLM call.
 
-    `input_tokens` in AZ's task_report is the RAW `prompt_tokens` from the
-    provider — on Anthropic this is already the billed regular-input count
-    (cache_read and cache_creation are NOT double-counted inside it). On
-    OpenAI, `prompt_tokens_details.cached_tokens` IS included in
-    prompt_tokens, so subtract it to avoid billing the same tokens twice.
+    `input_tokens` here is LiteLLM's normalized `prompt_tokens`, which —
+    contrary to an earlier assumption in this docstring — is the TOTAL
+    prompt token count INCLUDING the cache_read and cache_creation
+    buckets. (LiteLLM normalizes Anthropic's split usage into OpenAI-style
+    `prompt_tokens` semantics: a single number that represents
+    everything billed on the input side.)
 
-    The stream-usage probe normalizes to the Anthropic convention, so we
-    treat `input_tokens` as regular-only here. If callers pass a raw OpenAI
-    total they should subtract cache_read first.
+    Verified against Anthropic Console on 2026-04-30:
+      raw inputs:  prompt=1.224M  cache_read=638k  cache_create=316k
+      OUR previous logic (pre-fix): \$5.626  ← double-counts cache
+      THIS function (post-fix):     \$2.763
+      Anthropic Console:            \$2.70
+
+    So we have to subtract the cache buckets from `input_tokens` before
+    pricing the regular bucket — otherwise the cache tokens get billed
+    twice (once at input rate via input_tokens, once at cache rate
+    via the dedicated buckets).
+
+    Negative regular-input is clamped to 0 in case a provider one day
+    sends overlapping numbers we can't reconcile.
     """
     rates = get_rates(model)
+    inp = max(0, int(input_tokens))
+    cr = max(0, int(cache_read_tokens))
+    cc = max(0, int(cache_creation_tokens))
+    regular = max(0, inp - cr - cc)
     cost = (
-        max(0, int(input_tokens)) * rates["input_cost_per_token"]
+        regular * rates["input_cost_per_token"]
         + max(0, int(output_tokens)) * rates["output_cost_per_token"]
-        + max(0, int(cache_read_tokens)) * rates["cache_read_input_token_cost"]
-        + max(0, int(cache_creation_tokens)) * rates["cache_creation_input_token_cost"]
+        + cr * rates["cache_read_input_token_cost"]
+        + cc * rates["cache_creation_input_token_cost"]
     )
     return round(cost, 6)
 
