@@ -356,21 +356,36 @@ def calc_cost(
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
 ) -> float:
-    """Cache-aware cost calc. On Anthropic the provider-reported
-    `input_tokens` is already the regular-input-only count (cache_read /
-    cache_creation are billed separately), so we don't subtract — we just
-    price each bucket at its own rate.
+    """Cache-aware cost calc.
+
+    `input_tokens` here is LiteLLM's normalized `prompt_tokens` — the
+    TOTAL prompt token count INCLUDING the cache_read and cache_creation
+    buckets. The earlier assumption that Anthropic's split usage stayed
+    split through LiteLLM was wrong; LiteLLM normalizes everything into
+    OpenAI-style `prompt_tokens` semantics where the number is one
+    aggregate.
+
+    Verified against Anthropic Console on 2026-04-30:
+        raw inputs:  prompt=1.224M  cache_read=638k  cache_create=316k
+        pre-fix:  \$5.626  (double-counted cache)
+        post-fix: \$2.763  ≈ Console \$2.70
+
+    Same fix lives in agent-zero/lib/pricing.py:compute_cost.
     """
     info = _model_info(model)
     in_rate = info.get("input_cost_per_token", 0.000003)      # $3 / 1M fallback
     out_rate = info.get("output_cost_per_token", 0.000015)    # $15 / 1M
     read_rate = info.get("cache_read_input_token_cost", in_rate * 0.10)
     create_rate = info.get("cache_creation_input_token_cost", in_rate * 1.25)
+    inp = max(0, int(input_tokens))
+    cr = max(0, int(cache_read_tokens))
+    cc = max(0, int(cache_creation_tokens))
+    regular = max(0, inp - cr - cc)
     return (
-        max(0, int(input_tokens)) * in_rate
+        regular * in_rate
         + max(0, int(output_tokens)) * out_rate
-        + max(0, int(cache_read_tokens)) * read_rate
-        + max(0, int(cache_creation_tokens)) * create_rate
+        + cr * read_rate
+        + cc * create_rate
     )
 
 
