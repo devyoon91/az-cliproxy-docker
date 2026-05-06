@@ -71,7 +71,10 @@ curl http://localhost:8317/v1/models
 | **MCP 서버** | Sequential Thinking, Git, Fetch 등 도구 확장 | [mcp-guide.md](docs/mcp-guide.md) |
 | **스케줄러** | cron 기반 반복 실행, 예약 실행, 수동 실행 | [scheduler.md](docs/scheduler.md) |
 | **플러그인** | 18개 내장 플러그인, Plugin Hub, 핫 리로드 | [usage.md](docs/usage.md) |
-| **토큰 사용량 추적** | /usage 명령, 일일 리포트, 비용 모니터링 | [optimization.md](docs/optimization.md) |
+| **토큰 사용량 추적** | `/usage` (실시간) + `/today` `/week` `/tasks` (영구), `by:model` / `by:profile` breakdown | [optimization.md](docs/optimization.md) |
+| **예산 알림** | `/budget day|week N` 한도 설정, 80/100/150% 단계별 자동 Telegram 알림 | [telegram-bot.md](docs/telegram-bot.md) |
+| **가격 추적** | `/pricing` LiteLLM 가격 일일 스냅샷 + drift 감지 (매일 00:30 KST) | [telegram-bot.md](docs/telegram-bot.md) |
+| **웹 대시보드** | Chart.js 차트 (일별/모델별/scatter), 자동 갱신, `DASHBOARD_TOKEN` 인증 | [README#web-dashboard](#web-dashboard-선택) |
 | **백업/복원** | 로컬 스크립트(full/config/light) + Telegram 원격 백업 | [backup.md](docs/backup.md) |
 | **프롬프트 커스텀** | 코딩 규칙, 한국어, 작업 이력 관리 | [GUIDE.md](GUIDE.md#12-프롬프트-커스터마이징) |
 | **개인화 분리** | 하네스 킷과 개인 설정을 별도 저장소로 관리 ([az-agent-config-template](https://github.com/devyoon91/az-agent-config-template)) | [GUIDE.md](GUIDE.md#16-팁-개인화-저장소-분리) |

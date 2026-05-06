@@ -28,14 +28,14 @@ Agent Zero (Docker 컨테이너)
 
 | 명령 | 설명 |
 |------|------|
-| `/new` | 새 대화 시작 (컨텍스트 초기화) |
+| `/new` | 새 대화 시작 — `/api/chat_create` 호출로 실제 컨텍스트 생성 후 ID 반환 |
 | `/chats` | Agent Zero의 활성 채팅 목록 조회 |
 | `/switch [번호]` | 특정 채팅으로 전환 (예: `/switch 2`) |
 | `/logs` | 현재 채팅의 전체 로그를 파일(JSON + TXT)로 전송 |
 | `/docs` | 프로젝트 문서 목록 조회 |
 | `/docs [번호]` | 특정 문서 열람 (짧으면 텍스트, 길면 파일 전송) |
 | `/docs all` | 전체 문서 파일 다운로드 |
-| 일반 메시지 | Agent Zero에 지시 전달 → 응답은 모니터를 통해 자동 수신 |
+| 일반 메시지 | Agent Zero에 지시 전달 → 완료 시 답변 + 메트릭 카드 자동 수신 |
 
 ### 모니터링
 
@@ -43,38 +43,89 @@ Agent Zero (Docker 컨테이너)
 |------|------|
 | `/monitor_on` | 웹 채팅 모니터링 켜기 (현재 시점부터, 이전 히스토리 전송 안함) |
 | `/monitor_off` | 웹 채팅 모니터링 끄기 |
-| `/follow_on` | 자동 추적 켜기 — 웹에서 채팅 전환 시 모니터가 따라감 (기본: 켜짐) |
-| `/follow_off` | 자동 추적 끄기 — 현재 채팅만 고정 추적 |
+| `/track_chat_on` | 채팅 자동 추적 켜기 — 웹 UI 에서 채팅 전환 시 모니터도 따라감 (기본: 켜짐) |
+| `/track_chat_off` | 채팅 자동 추적 끄기 — 현재 채팅만 고정 추적 |
+| `/verbose_on` | 진행 중 AZ 활동 로그도 보기 (도구/코드/info 등 streaming, 디버그용) |
+| `/verbose_off` | 진행 중엔 조용, 완료 시 답변+메트릭만 (기본) |
 
-### 상태/비용
+> `/follow_on /follow_off` 는 `/track_chat_on /track_chat_off` 의 레거시 별명으로 그대로 동작 (PR #36).
+
+### 상태/비용 (실시간)
 
 | 명령 | 설명 |
 |------|------|
-| `/status` | Agent Zero 연결 상태, 모니터링/추적 상태, 현재 채팅 ID |
-| `/usage` | 오늘 토큰 사용량, 예상 비용, 최근 7일 기록 |
+| `/status` | Agent Zero 연결 상태, 활성 프로파일/모델 (실제 `_model_config` 플러그인 API), 모니터링/추적 상태, 현재 채팅 ID |
+| `/usage` | 오늘 토큰 사용량, 비용 (cache 가중), 최근 7일 history (bridge 세션 내, 재기동 시 리셋) |
+
+### 집계 (영구 데이터, task JSON 기반)
+
+| 명령 | 설명 |
+|------|------|
+| `/today` | 오늘 태스크 집계 (KST 기준): 태스크 수 / LLM·도구 호출 수 / 토큰 / 캐시 / 비용 / 캐시 효율 메트릭 / 모델별 breakdown |
+| `/today by:model` | 위 + 상세 모델별 테이블 |
+| `/today by:profile` | 프로파일별 비용 / 태스크 수 breakdown |
+| `/week` | 최근 7일 일별 집계 + 주간 합계 + 모델별 |
+| `/week by:model` / `by:profile` | 주간 단위 상세 breakdown |
+| `/tasks [N]` | 최근 N개 태스크 개별 요약 (기본 10) |
+
+### 예산 / 가격 (M5)
+
+| 명령 | 설명 |
+|------|------|
+| `/budget` | 일/주 한도 + 현재 게이지 보기 |
+| `/budget day <USD>` | 일간 한도 설정 (예: `/budget day 5`) |
+| `/budget week <USD>` | 주간 한도 설정 |
+| `/budget reset` | 알림 cooldown 초기화 |
+| `/budget day off` / `week off` | 한도 해제 |
+| `/pricing` | 최신 LiteLLM 가격 스냅샷 요약 |
+| `/pricing list` | 저장된 스냅샷 날짜 목록 (최대 14개) |
+| `/pricing snapshot` | 강제 스냅샷 생성 (자동: 매일 00:30 KST) |
+| `/pricing diff` | 최근 2개 스냅샷 차이 (가격 변동 감지) |
+
+> 한도 도달 시 80% / 100% / 150% 단계별 자동 알림 (각 단계당 일 1회 cooldown).
+
+### 기타
+
+| 명령 | 설명 |
+|------|------|
+| `/backup` | 설정 경량 백업 (ZIP 파일 전송) |
 | `/start` | 봇 시작 안내 |
 | `/help` | 전체 명령어 목록 |
 
 ---
 
-## 모니터링 알림 형식
+## 메시지 형식
 
-웹 UI 또는 Telegram에서 Agent Zero와 대화할 때, 모든 활동이 Telegram으로 실시간 전달됩니다.
+### 태스크 완료 (자동, 답변 + 메트릭 두 메시지)
+
+```
+🤖 [AZ 답변 본문]    ← markdown → Telegram HTML 자동 변환
+                       (코드 블록, 헤더, 표, 볼드, 인라인 코드, 링크)
+
+✅ 태스크 완료 (task-...)
+⏱ Ns  🔧 tools N  💬 LLM N
+💰 $X.XXXX
+  • model: N× in ... out ... | cache r:... c:... → $...
+```
+
+기본은 진행 중 조용 → 완료 시 두 메시지. `/verbose_on` 으로 streaming 모드 (모든 AZ 활동 로그 실시간) 전환 가능.
+
+### 모니터링 알림 (verbose 모드)
 
 | 아이콘 | 로그 타입 | 설명 |
 |--------|-----------|------|
-| 👤 | user | 사용자가 입력한 메시지 |
+| 👤 | user | 사용자가 입력한 메시지 (echo) |
 | 🤖 | response/ai/agent | Agent Zero의 응답 |
 | ⚙️ | code_exe | 코드 실행 내용 (미리보기 500자) |
-| 🔧 | tool | 도구 호출 (검색, 메모리 등) |
+| 🔧 | tool | 도구 호출 |
 | ℹ️ | info | 정보성 메시지 |
 | ❌ | error | 오류 발생 |
 | ⚠️ | warning | 경고 |
 | 🔄 | (자동) | 채팅 전환 감지 (자동 추적 시) |
 
-- 임시 메시지(thinking 등)는 전달하지 않음
-- 응답이 2000자 초과 시 자동 생략
-- Telegram 메시지 길이 제한(4096자)에 맞춰 자동 분할
+- 임시 메시지(thinking 등) 미전달
+- Telegram 4096자 제한 시 자동 분할
+- 답변에 markdown (헤더 / 표 / 코드 / 볼드) 포함되면 HTML 로 변환 후 전송. 변환 실패 시 plain text 자동 fallback.
 
 ---
 
@@ -107,15 +158,17 @@ Telegram에서 `/chats` 입력 시:
 
 → 2번 채팅으로 전환. 이후 Telegram 메시지는 해당 채팅에 전달되고, 모니터도 해당 채팅을 추적합니다.
 
-### 자동 추적 (Auto Follow)
+### 자동 추적 (Track Chat)
 
-`/follow_on` 상태에서는 웹 UI에서 다른 채팅을 열면 모니터가 자동으로 따라갑니다.
+`/track_chat_on` (기본 켜짐) 상태에서는 웹 UI에서 다른 채팅을 열면 모니터가 자동으로 따라갑니다.
 
 ```
-🔄 채팅 전환 감지: 1188c4fe... → a3f2b8c1...
+🔄 채팅 전환 감지: qv9iG66k → ZKAF1imc
 ```
 
-`/follow_off`하면 현재 채팅만 고정 추적하여 웹에서 다른 채팅을 열어도 Telegram 알림은 고정된 채팅의 것만 옵니다.
+`/track_chat_off` 하면 현재 채팅만 고정 추적하여 웹에서 다른 채팅을 열어도 Telegram 알림은 고정된 채팅의 것만 옵니다.
+
+> 레거시 별명 `/follow_on /follow_off` 도 그대로 동작합니다 (PR #36 호환).
 
 ---
 
