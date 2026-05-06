@@ -1,6 +1,6 @@
 # Agent Zero + CLIProxy 구축 가이드
 
-> Agent Zero v1.9 | CLIProxy v6.9+
+> Agent Zero v1.13 | CLIProxy v6.9+
 
 이 문서는 Agent Zero를 CLIProxy와 연동하여 Docker 환경에서 구동하는 전체 과정을 단계별로 정리한 가이드입니다.
 
@@ -119,7 +119,7 @@ services:
 
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
-    image: agent0ai/agent-zero:v1.9
+    image: agent0ai/agent-zero:v1.13
     container_name: agent-zero
     ports:
       - "50001:80"
