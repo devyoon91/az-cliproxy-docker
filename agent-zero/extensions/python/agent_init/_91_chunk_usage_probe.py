@@ -269,6 +269,49 @@ async def _wrapped_acompletion(*args, **kwargs):
     result = await _original_acompletion(*args, **kwargs)
     if kwargs.get("stream"):
         return _wrap_stream(result, kwargs.get("model", "unknown"))
+
+    # ── Non-stream path ─────────────────────────────────────────────────
+    # AZ's `unified_call` chooses stream=True only when at least one
+    # callback is set. Util-model calls (rename_chat, infection_check,
+    # chat_compaction, email_integration, etc.) typically pass NO callback
+    # → stream=False → we land here. The result is a complete
+    # ModelResponse with `.usage` already populated by LiteLLM, so we
+    # reuse the same ContextVar + bridge-track plumbing the stream branch
+    # uses. Closes issue #52 (util Haiku captured as in=1/out=3 sentinel
+    # because the prior code returned the result untouched and
+    # task_report's llm_call fell through to approximate_tokens).
+    try:
+        usage = _extract_usage(result)
+        if usage and (usage["prompt_tokens"] > 0 or usage["completion_tokens"] > 0):
+            model_name = kwargs.get("model", "unknown")
+            usage["model"] = model_name
+            last_stream_usage.set(usage)
+            if requests is not None:
+                try:
+                    requests.post(
+                        TELEGRAM_BRIDGE_URL,
+                        json={
+                            "model": model_name,
+                            "input_tokens": usage["prompt_tokens"],
+                            "output_tokens": usage["completion_tokens"],
+                            "cache_read_tokens": usage["cache_read_input_tokens"],
+                            "cache_creation_tokens": usage["cache_creation_input_tokens"],
+                        },
+                        timeout=3,
+                    )
+                except Exception:
+                    pass
+            print(
+                f"[NonStreamUsageCapture] model={model_name} "
+                f"in={usage['prompt_tokens']} out={usage['completion_tokens']} "
+                f"cache_read={usage['cache_read_input_tokens']} "
+                f"cache_creation={usage['cache_creation_input_tokens']}",
+                flush=True,
+            )
+    except Exception as e:
+        # Never let usage extraction failure impact the actual completion.
+        print(f"[NonStreamUsageCapture] extract failed: {e}", flush=True)
+
     return result
 
 
