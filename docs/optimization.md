@@ -158,7 +158,7 @@ dedicated_context: false (기본)          dedicated_context: true
 ## 6. Anthropic 프롬프트 캐싱 (비용 90% 절감)
 
 Anthropic API를 사용하면 **프롬프트 캐싱**이 자동 적용되어 반복 호출 시 입력 비용이 90% 절감됩니다.
-Agent Zero v1.9에는 이미 캐싱 로직이 내장되어 있으며, provider를 `"anthropic"`으로 설정하면 바로 활성화됩니다.
+Agent Zero v1.x에는 이미 캐싱 로직이 내장되어 있으며, provider를 `"anthropic"`으로 설정하면 바로 활성화됩니다.
 
 **상세 내용**: [프롬프트 캐싱 가이드](prompt-caching.md) 참조
 
