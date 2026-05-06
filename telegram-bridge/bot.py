@@ -126,18 +126,33 @@ def md_to_telegram_html(text: str) -> str:
     )
 
     # Step 2: ```lang\n...\n``` fenced code blocks.
-    # Run FIRST so the inner content (which may contain | or # chars) isn't
-    # touched by the table / header rules below.
-    def _fence(m):
+    # Stash each fence as a placeholder token and only restore them at the
+    # very end. Without this, line-anchored rules like the header regex
+    # (`^#{1,6} `) chase Bash comments INSIDE the fence and wrap them in
+    # `<b>...</b>`, producing nested `<b><pre><code>...</b></code></pre>`
+    # mush that Telegram rejects with "can't parse entities" → bridge
+    # falls back to plain text → user sees literal ``` markers. Same shape
+    # of problem applies to the table rule and the bold/italic regexes
+    # whenever shell/code content contains `|`, `*`, `**`.
+    #
+    # Sentinel chars `\x00` aren't valid in user input we'd render, so
+    # they're a safe placeholder boundary.
+    fence_placeholders: list[str] = []
+
+    def _stash_fence(m):
         lang = m.group(1) or ""
         body = m.group(2).rstrip("\n")
         if lang:
-            return f'<pre><code class="language-{lang}">{body}</code></pre>'
-        return f"<pre>{body}</pre>"
+            html = f'<pre><code class="language-{lang}">{body}</code></pre>'
+        else:
+            html = f"<pre>{body}</pre>"
+        idx = len(fence_placeholders)
+        fence_placeholders.append(html)
+        return f"\x00FENCE{idx}\x00"
 
     out = _re_md_to_html.sub(
         r"```(\w*)\n?(.*?)```",
-        _fence,
+        _stash_fence,
         out,
         flags=_re_md_to_html.DOTALL,
     )
@@ -206,6 +221,12 @@ def md_to_telegram_html(text: str) -> str:
         out,
         flags=_re_md_to_html.MULTILINE,
     )
+
+    # Step 9: Restore stashed fenced code blocks. Plain string replace —
+    # placeholder tokens carry the index, content was already escaped + tag-
+    # wrapped at stash time so nothing else needs to happen here.
+    for idx, html in enumerate(fence_placeholders):
+        out = out.replace(f"\x00FENCE{idx}\x00", html)
 
     return out
 
