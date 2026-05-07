@@ -45,7 +45,8 @@ try:
     from helpers.pricing import compute_cost  # type: ignore
 except Exception:  # pragma: no cover - only runs inside AZ container
     def compute_cost(model=None, input_tokens=0, output_tokens=0,
-                     cache_read_tokens=0, cache_creation_tokens=0) -> float:  # type: ignore
+                     cache_read_tokens=0, cache_creation_tokens=0,
+                     reasoning_tokens=0) -> float:  # type: ignore
         return 0.0
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ def _compute_totals(report: dict) -> dict:
         "output_tokens": sum(c.get("output_tokens", 0) for c in calls),
         "cache_read_tokens": sum(c.get("cache_read_tokens", 0) for c in calls),
         "cache_creation_tokens": sum(c.get("cache_creation_tokens", 0) for c in calls),
+        "reasoning_tokens": sum(c.get("reasoning_tokens", 0) for c in calls),
         # Per-call `cost_usd` is authoritative; we sum rather than re-computing
         # from totals so model-mix inside one task is priced accurately.
         "cost_usd": round(sum(c.get("cost_usd", 0.0) or 0.0 for c in calls), 6),
@@ -419,11 +421,17 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
 
     usage = getattr(response, "usage", None) if response is not None else None
 
+    reasoning_tokens = 0
     if stream_usage:
         input_tokens = int(stream_usage.get("prompt_tokens", 0) or 0)
         output_tokens = int(stream_usage.get("completion_tokens", 0) or 0)
         cache_read = int(stream_usage.get("cache_read_input_tokens", 0) or 0)
         cache_creation = int(stream_usage.get("cache_creation_input_tokens", 0) or 0)
+        # Reasoning / extended-thinking tokens (Claude 4.x, OpenAI o-series).
+        # Anthropic bills these at output rate so they need to flow through
+        # to compute_cost; before this change task_report missed them and
+        # /today undercounted Sonnet by ~3-5% vs Anthropic Console.
+        reasoning_tokens = int(stream_usage.get("reasoning_tokens", 0) or 0)
         approximate = False
         # Consume so the next call in the same monologue does not re-read
         # stale values. Stream-capture writes fresh values each call.
@@ -435,6 +443,11 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
         input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
         cache_read, cache_creation = _extract_cache_tokens(usage)
+        # Same reasoning extraction as the probe's _extract_usage —
+        # OpenAI-shape `completion_tokens_details.reasoning_tokens`.
+        cdetails = getattr(usage, "completion_tokens_details", None)
+        if cdetails is not None:
+            reasoning_tokens = int(getattr(cdetails, "reasoning_tokens", 0) or 0)
         approximate = False
     else:
         input_tokens = _estimate_input_tokens(call_data)
@@ -453,6 +466,7 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
         output_tokens=output_tokens,
         cache_read_tokens=cache_read,
         cache_creation_tokens=cache_creation,
+        reasoning_tokens=reasoning_tokens,
     )
 
     r["llm_calls"].append({
@@ -462,6 +476,7 @@ def llm_call(agent, call_data, response, reasoning=None) -> None:
         "output_tokens": output_tokens,
         "cache_read_tokens": cache_read,
         "cache_creation_tokens": cache_creation,
+        "reasoning_tokens": reasoning_tokens,
         "cost_usd": cost,
         "tokens_approximate": approximate,
     })

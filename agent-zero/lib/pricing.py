@@ -149,6 +149,7 @@ def compute_cost(
     output_tokens: int = 0,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ) -> float:
     """Compute total USD cost for one LLM call.
 
@@ -172,15 +173,23 @@ def compute_cost(
 
     Negative regular-input is clamped to 0 in case a provider one day
     sends overlapping numbers we can't reconcile.
+
+    `reasoning_tokens` (Claude 4.x extended thinking, OpenAI o-series) are
+    billed at the OUTPUT rate per Anthropic's docs. LiteLLM's normalized
+    `usage.completion_tokens` typically does NOT include the reasoning
+    portion (they're surfaced separately in `completion_tokens_details`),
+    so we add reasoning on top of output_tokens here. Closes the residual
+    ~3-5% Sonnet undercount we saw vs Anthropic Console after PR #51.
     """
     rates = get_rates(model)
     inp = max(0, int(input_tokens))
     cr = max(0, int(cache_read_tokens))
     cc = max(0, int(cache_creation_tokens))
+    rt = max(0, int(reasoning_tokens))
     regular = max(0, inp - cr - cc)
     cost = (
         regular * rates["input_cost_per_token"]
-        + max(0, int(output_tokens)) * rates["output_cost_per_token"]
+        + (max(0, int(output_tokens)) + rt) * rates["output_cost_per_token"]
         + cr * rates["cache_read_input_token_cost"]
         + cc * rates["cache_creation_input_token_cost"]
     )

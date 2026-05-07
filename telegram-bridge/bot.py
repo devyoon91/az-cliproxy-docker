@@ -316,6 +316,7 @@ usage_today: dict = {
     "output_tokens": 0,
     "cache_read_tokens": 0,
     "cache_creation_tokens": 0,
+    "reasoning_tokens": 0,
     "requests": 0,
     "cost_usd": 0.0,
     "by_model": {},  # 모델별 집계
@@ -376,6 +377,7 @@ def calc_cost(
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ) -> float:
     """Cache-aware cost calc.
 
@@ -401,10 +403,13 @@ def calc_cost(
     inp = max(0, int(input_tokens))
     cr = max(0, int(cache_read_tokens))
     cc = max(0, int(cache_creation_tokens))
+    rt = max(0, int(reasoning_tokens))
     regular = max(0, inp - cr - cc)
+    # Reasoning / extended-thinking tokens (Claude 4.x, OpenAI o-series) are
+    # billed at output rate. Mirrors agent-zero/lib/pricing.py:compute_cost.
     return (
         regular * in_rate
-        + max(0, int(output_tokens)) * out_rate
+        + (max(0, int(output_tokens)) + rt) * out_rate
         + cr * read_rate
         + cc * create_rate
     )
@@ -432,8 +437,14 @@ def track_usage(
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ):
-    """사용량 누적 (cache tokens 포함)"""
+    """사용량 누적 (cache + reasoning tokens 포함).
+
+    `reasoning_tokens` (Claude 4.x 확장 사고, OpenAI o-series) 는 별도
+    필드로 추적해서 ``/usage`` 표시 시 분리 표시 가능하게 한다. cost 계산
+    은 ``calc_cost`` 가 자동으로 output rate 로 청구.
+    """
     global usage_today
     # Collapse provider-prefixed and bare forms so /today by_model stays unified.
     model = _normalize_model(model)
@@ -451,17 +462,22 @@ def track_usage(
             "output_tokens": 0,
             "cache_read_tokens": 0,
             "cache_creation_tokens": 0,
+            "reasoning_tokens": 0,
             "requests": 0,
             "cost_usd": 0.0,
             "by_model": {},
         }
 
-    cost = calc_cost(model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+    cost = calc_cost(
+        model, input_tokens, output_tokens,
+        cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+    )
 
     usage_today["input_tokens"] += input_tokens
     usage_today["output_tokens"] += output_tokens
     usage_today["cache_read_tokens"] = usage_today.get("cache_read_tokens", 0) + cache_read_tokens
     usage_today["cache_creation_tokens"] = usage_today.get("cache_creation_tokens", 0) + cache_creation_tokens
+    usage_today["reasoning_tokens"] = usage_today.get("reasoning_tokens", 0) + reasoning_tokens
     usage_today["requests"] += 1
     usage_today["cost_usd"] += cost
 
@@ -471,6 +487,7 @@ def track_usage(
             "output_tokens": 0,
             "cache_read_tokens": 0,
             "cache_creation_tokens": 0,
+            "reasoning_tokens": 0,
             "requests": 0,
             "cost_usd": 0.0,
         }
@@ -479,6 +496,7 @@ def track_usage(
     m["output_tokens"] += output_tokens
     m["cache_read_tokens"] = m.get("cache_read_tokens", 0) + cache_read_tokens
     m["cache_creation_tokens"] = m.get("cache_creation_tokens", 0) + cache_creation_tokens
+    m["reasoning_tokens"] = m.get("reasoning_tokens", 0) + reasoning_tokens
     m["requests"] += 1
     m["cost_usd"] += cost
 
@@ -2453,6 +2471,7 @@ def _aggregate(tasks: list[dict]) -> dict:
         "output_tokens": 0,
         "cache_read_tokens": 0,
         "cache_creation_tokens": 0,
+        "reasoning_tokens": 0,
         "cost_usd": 0.0,
         "by_model": {},
         "by_profile": {},
@@ -2463,7 +2482,8 @@ def _aggregate(tasks: list[dict]) -> dict:
             agg[reason] += 1
         totals = t.get("totals") or {}
         for k in ("tool_calls", "llm_calls", "input_tokens", "output_tokens",
-                  "cache_read_tokens", "cache_creation_tokens"):
+                  "cache_read_tokens", "cache_creation_tokens",
+                  "reasoning_tokens"):
             agg[k] += int(totals.get(k, 0) or 0)
         agg["cost_usd"] += float(totals.get("cost_usd", 0.0) or 0.0)
 
@@ -2761,6 +2781,11 @@ def _format_agg_block(title: str, agg: dict) -> list[str]:
             f"  캐시: read {agg['cache_read_tokens']:,} · "
             f"create {agg['cache_creation_tokens']:,}"
         )
+    rt = agg.get("reasoning_tokens", 0)
+    if rt:
+        # Reasoning / extended-thinking tokens — already folded into cost
+        # via output rate, shown separately so the breakdown is honest.
+        lines.append(f"  사고 토큰: {rt:,} (출력 요율 청구)")
     lines.append(f"  💰 ${agg['cost_usd']:.4f}")
     return lines
 
@@ -3154,6 +3179,7 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = usage_today
     cache_read = today.get("cache_read_tokens", 0)
     cache_create = today.get("cache_creation_tokens", 0)
+    reasoning = today.get("reasoning_tokens", 0)
 
     # 캐시 절약 추정치: cache_read 만큼은 90% 할인된다고 가정 (Anthropic)
     # 실절약 = cache_read × (input_rate - cache_read_rate) → 대략 input × 0.9
@@ -3167,6 +3193,11 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(
             f"캐시: read {cache_read:,}  |  create {cache_create:,}"
         )
+    if reasoning:
+        # Reasoning / extended-thinking tokens (Claude 4.x, OpenAI o-series).
+        # Billed at output rate — already folded into cost_usd; shown
+        # separately so users can see how much thinking actually happened.
+        lines.append(f"사고 토큰: {reasoning:,} (출력 요율 청구)")
     lines.append(f"비용: ${today['cost_usd']:.4f}")
 
     by_model = today.get("by_model", {})
@@ -3175,11 +3206,13 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for model, stats in sorted(by_model.items(), key=lambda x: x[1]["cost_usd"], reverse=True):
             cr = stats.get("cache_read_tokens", 0)
             cc = stats.get("cache_creation_tokens", 0)
+            rt = stats.get("reasoning_tokens", 0)
             cache_part = f" | cache r:{cr:,} c:{cc:,}" if (cr or cc) else ""
+            reason_part = f" | reasoning:{rt:,}" if rt else ""
             lines.append(
                 f"  {model}\n"
                 f"    {stats['requests']}건 | "
-                f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,}{cache_part}\n"
+                f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,}{cache_part}{reason_part}\n"
                 f"    ${stats['cost_usd']:.4f}"
             )
 
@@ -3375,14 +3408,16 @@ async def webhook_handler(request):
 
 
 async def usage_track_handler(request):
-    """HTTP POST로 토큰 사용량 기록 (cache 토큰 포함).
+    """HTTP POST로 토큰 사용량 기록 (cache + reasoning 토큰 포함).
 
     Payload: {
         "model": "anthropic/claude-sonnet-4-6",
         "input_tokens": 1500,
         "output_tokens": 500,
-        "cache_read_tokens": 0,     # optional (Anthropic prompt caching)
-        "cache_creation_tokens": 0  # optional
+        "cache_read_tokens": 0,        # optional (Anthropic prompt caching)
+        "cache_creation_tokens": 0,    # optional
+        "reasoning_tokens": 0          # optional (Claude 4.x extended thinking,
+                                       #          OpenAI o-series; billed at output rate)
     }
     """
     try:
@@ -3392,7 +3427,11 @@ async def usage_track_handler(request):
         output_tokens = int(data.get("output_tokens", 0))
         cache_read = int(data.get("cache_read_tokens", 0))
         cache_creation = int(data.get("cache_creation_tokens", 0))
-        track_usage(model, input_tokens, output_tokens, cache_read, cache_creation)
+        reasoning = int(data.get("reasoning_tokens", 0))
+        track_usage(
+            model, input_tokens, output_tokens,
+            cache_read, cache_creation, reasoning,
+        )
         # Budget check fires AFTER track_usage so the cumulative cost in the
         # on-disk task JSONs has caught up. Fire-and-forget — never let a
         # failed alert reject the /track request itself.
