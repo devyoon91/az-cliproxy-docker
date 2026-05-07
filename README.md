@@ -66,6 +66,29 @@ API 에 직접 연결하는 경로, **Track B (CLIProxy)** 는 공식 CLI 의 OA
 util-model 의 base URL 을 각각 다르게 지정해 모델별로 트랙을 섞어 쓸 수 있습니다
 (예: chat 은 Track B 로 한도 활용, util 은 Track A 로 안정성 확보).
 
+### 로컬 커스텀 마운트 (`docker-compose.override.yml`)
+
+개인화 영역(예: sibling [az-agent-config](https://github.com/devyoon91/az-agent-config-template)
+의 스킬/에이전트, 사내 전용 프롬프트 등)을 컨테이너에 임시로 마운트할 때는
+[`docker-compose.override.yml`](https://docs.docker.com/compose/multiple-compose-files/) 을
+사용합니다. Docker Compose 표준 기능으로 main `docker-compose.yml` 과 자동 머지됩니다
+— 별도 플래그 불필요.
+
+```yaml
+# docker-compose.override.yml — .gitignore 됨, 추적 안 함
+services:
+  agent-zero:
+    volumes:
+      - ../az-agent-config/skills:/a0/usr/skills:ro
+```
+
+**정책** ([issue #53](https://github.com/devyoon91/az-cliproxy-docker/issues/53)):
+
+- main `docker-compose.yml` 에 sibling 디렉토리(`../...`) 마운트 **추가 금지** — 다른
+  환경/사용자에서 해당 디렉토리가 없으면 `:ro` mount source missing 으로 부팅 실패.
+- 개인화·테스트 마운트는 `docker-compose.override.yml` 에만, 항상 gitignored.
+- 테스트 종료 시 파일 삭제 후 `docker compose up -d --force-recreate <service>` 로 롤백.
+
 ## Quick Start
 
 ```bash
