@@ -14,4 +14,10 @@
   - Anthropic / OpenAI keys: `[ -n "$ANTHROPIC_API_KEY" ] && echo "key present"`
   Only ask the user when the value is actually missing.
 
-- The `response` tool's `text` argument is what the user receives **literally** (Telegram, web UI, etc). Never put placeholders, file references, or template directives (`§§include(...)`, `{{var}}`, `<file:...>`) in there expecting the runtime to dereference them — those only expand during system-prompt rendering, not in tool-call args. If you wrote the answer to a file (e.g. via `text_editor`), **read the file back and paste its contents into `response.text`**. If the answer is long, paste it anyway — the Telegram bridge handles truncation (`…(생략)` at ~3,900 chars) and markdown→HTML conversion. There is no "send this file" shortcut; the tool args are the wire format.
+- **`response.text` = wire format.** Whatever string you put into the `response` tool's `text` argument is delivered **byte-for-byte** to the user (Telegram, web UI). The runtime does not dereference, expand, fetch, or interpret it in any way. This is non-negotiable regardless of where the actual content lives. Specifically forbidden:
+  - Template directives — `§§include(...)`, `{{var}}`, `<file:...>` (these expand only during system-prompt RENDERING, not in tool-call args)
+  - File path references of any flavor — your own files (`/a0/usr/workdir/*.md`), AZ's internal chat history (`/a0/usr/chats/<ctxid>/messages/*.txt`), workdir paths, anything
+  - Phrases like "see file X" / "the full output is at Y" / "I saved it to Z" with the expectation the user will open it
+  - Forwarding a subordinate's response by reference — the subordinate's text comes back to you as a string; you must **paste that string** into your `response.text`, not point at where AZ stored it
+
+  Decision rule: **if you can't show the actual answer text inline in this very tool call, you don't have an answer to send yet.** Read the file/subordinate-response back into your context and paste the literal content. Length is not an excuse — the Telegram bridge truncates long answers at ~3,900 chars with a `…(생략)` marker and renders markdown → HTML automatically; pasting a full 10k-char response is fine, the bridge handles it. There is no "send this file" shortcut.
