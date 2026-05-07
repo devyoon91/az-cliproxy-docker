@@ -67,7 +67,15 @@ _patched = False
 
 
 def _extract_usage(assembled) -> dict | None:
-    """Return a plain dict of usage fields from an assembled ModelResponse."""
+    """Return a plain dict of usage fields from an assembled ModelResponse.
+
+    Includes `reasoning_tokens` for Claude 4.x extended thinking (and
+    OpenAI o-series models): LiteLLM normalizes these into the OpenAI
+    shape `usage.completion_tokens_details.reasoning_tokens`. Anthropic
+    bills thinking tokens at the output rate, so missing them shows up
+    as a small (~3-5%) under-count vs Anthropic Console — the gap we
+    saw on the 5/7 reconciliation.
+    """
     if assembled is None:
         return None
     usage = getattr(assembled, "usage", None)
@@ -84,12 +92,26 @@ def _extract_usage(assembled) -> dict | None:
         "completion_tokens": g("completion_tokens"),
         "cache_read_input_tokens": g("cache_read_input_tokens"),
         "cache_creation_input_tokens": g("cache_creation_input_tokens"),
+        "reasoning_tokens": 0,
     }
     # Fold OpenAI-style cached_tokens into cache_read if present
     details = getattr(usage, "prompt_tokens_details", None)
     if details is not None:
         cached = getattr(details, "cached_tokens", 0) or 0
         data["cache_read_input_tokens"] += cached
+
+    # Reasoning / thinking tokens — OpenAI-shape `completion_tokens_details`.
+    # LiteLLM normalizes Anthropic extended-thinking into this same shape.
+    cdetails = getattr(usage, "completion_tokens_details", None)
+    if cdetails is not None:
+        data["reasoning_tokens"] = int(
+            getattr(cdetails, "reasoning_tokens", 0) or 0
+        )
+    elif isinstance(usage, dict):
+        cd = usage.get("completion_tokens_details") or {}
+        if isinstance(cd, dict):
+            data["reasoning_tokens"] = int(cd.get("reasoning_tokens", 0) or 0)
+
     return data
 
 
@@ -131,6 +153,20 @@ def _merge_chunk_usage(chunk, acc: dict) -> None:
         if v > acc.get(f, 0):
             acc[f] = v
 
+    # Reasoning / thinking tokens — same cumulative-max merge as above
+    # because Claude can emit incremental thinking deltas before final.
+    cdetails = getattr(usage, "completion_tokens_details", None)
+    if cdetails is not None:
+        rt = int(getattr(cdetails, "reasoning_tokens", 0) or 0)
+        if rt > acc.get("reasoning_tokens", 0):
+            acc["reasoning_tokens"] = rt
+    elif isinstance(usage, dict):
+        cd = usage.get("completion_tokens_details") or {}
+        if isinstance(cd, dict):
+            rt = int(cd.get("reasoning_tokens", 0) or 0)
+            if rt > acc.get("reasoning_tokens", 0):
+                acc["reasoning_tokens"] = rt
+
     # OpenAI-style cache falls in prompt_tokens_details
     details = getattr(usage, "prompt_tokens_details", None)
     if details is not None:
@@ -161,6 +197,7 @@ async def _wrap_stream(wrapper, model_name: str):
         "completion_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0,
     }
     n_chunks = 0
     n_swallowed = 0
@@ -233,6 +270,7 @@ async def _wrap_stream(wrapper, model_name: str):
                                 "output_tokens": acc["completion_tokens"],
                                 "cache_read_tokens": acc["cache_read_input_tokens"],
                                 "cache_creation_tokens": acc["cache_creation_input_tokens"],
+                                "reasoning_tokens": acc.get("reasoning_tokens", 0),
                             },
                             timeout=3,
                         )
@@ -243,6 +281,7 @@ async def _wrap_stream(wrapper, model_name: str):
                     f"in={acc['prompt_tokens']} out={acc['completion_tokens']} "
                     f"cache_read={acc['cache_read_input_tokens']} "
                     f"cache_creation={acc['cache_creation_input_tokens']} "
+                    f"reasoning={acc.get('reasoning_tokens', 0)} "
                     f"chunks={n_chunks} inner={len(inner_chunks)} drained={n_drained} "
                     f"usage_chunks={n_with_usage} swallowed={n_swallowed}",
                     flush=True,
@@ -297,6 +336,7 @@ async def _wrapped_acompletion(*args, **kwargs):
                             "output_tokens": usage["completion_tokens"],
                             "cache_read_tokens": usage["cache_read_input_tokens"],
                             "cache_creation_tokens": usage["cache_creation_input_tokens"],
+                            "reasoning_tokens": usage.get("reasoning_tokens", 0),
                         },
                         timeout=3,
                     )
@@ -306,7 +346,8 @@ async def _wrapped_acompletion(*args, **kwargs):
                 f"[NonStreamUsageCapture] model={model_name} "
                 f"in={usage['prompt_tokens']} out={usage['completion_tokens']} "
                 f"cache_read={usage['cache_read_input_tokens']} "
-                f"cache_creation={usage['cache_creation_input_tokens']}",
+                f"cache_creation={usage['cache_creation_input_tokens']} "
+                f"reasoning={usage.get('reasoning_tokens', 0)}",
                 flush=True,
             )
     except Exception as e:
@@ -332,6 +373,7 @@ def _wrap_sync_stream(wrapper, model_name: str):
         "completion_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0,
     }
     n_chunks = 0
     n_swallowed = 0
@@ -391,6 +433,7 @@ def _wrap_sync_stream(wrapper, model_name: str):
                                 "output_tokens": acc["completion_tokens"],
                                 "cache_read_tokens": acc["cache_read_input_tokens"],
                                 "cache_creation_tokens": acc["cache_creation_input_tokens"],
+                                "reasoning_tokens": acc.get("reasoning_tokens", 0),
                             },
                             timeout=3,
                         )
@@ -401,6 +444,7 @@ def _wrap_sync_stream(wrapper, model_name: str):
                     f"in={acc['prompt_tokens']} out={acc['completion_tokens']} "
                     f"cache_read={acc['cache_read_input_tokens']} "
                     f"cache_creation={acc['cache_creation_input_tokens']} "
+                    f"reasoning={acc.get('reasoning_tokens', 0)} "
                     f"chunks={n_chunks} inner={len(inner_chunks)} drained={n_drained} "
                     f"usage_chunks={n_with_usage} swallowed={n_swallowed}",
                     flush=True,
@@ -450,6 +494,7 @@ def _wrapped_completion(*args, **kwargs):
                             "output_tokens": usage["completion_tokens"],
                             "cache_read_tokens": usage["cache_read_input_tokens"],
                             "cache_creation_tokens": usage["cache_creation_input_tokens"],
+                            "reasoning_tokens": usage.get("reasoning_tokens", 0),
                         },
                         timeout=3,
                     )
@@ -459,7 +504,8 @@ def _wrapped_completion(*args, **kwargs):
                 f"[SyncNonStreamUsageCapture] model={model_name} "
                 f"in={usage['prompt_tokens']} out={usage['completion_tokens']} "
                 f"cache_read={usage['cache_read_input_tokens']} "
-                f"cache_creation={usage['cache_creation_input_tokens']}",
+                f"cache_creation={usage['cache_creation_input_tokens']} "
+                f"reasoning={usage.get('reasoning_tokens', 0)}",
                 flush=True,
             )
     except Exception as e:
