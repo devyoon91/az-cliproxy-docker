@@ -1,18 +1,32 @@
 """
-LLM 토큰 사용량 추적 Extension
-- litellm.callbacks에 CustomLogger를 등록하여 모든 LLM 호출 추적
-- Telegram Bridge /track webhook으로 자동 전송
+LLM 토큰 사용량 추적 Extension (logging only, since PR #62 dedupe).
+
+History:
+  • Original role: register a LiteLLM CustomLogger that POSTed to the
+    bridge /track webhook on every successful LLM call.
+  • PR #54 (2026-04): probe (`_91_chunk_usage_probe.py`) added /track
+    POSTs from its async wrapper to capture stream calls that this
+    callback's success path didn't reach.
+  • PR #61 (2026-05): probe extended to sync paths.
+  • Result: probe now covers ALL completion paths (sync/async × stream/
+    non-stream). This file's `requests.post(...)` to /track had become
+    redundant for non-stream paths and was *double-counting* in the
+    bridge's `usage_today` (e.g. /usage showed 34 Sonnet calls while
+    /today's task JSON showed 17 — exact 2x signature).
+
+Now: keep the CustomLogger registration so the [UsageTracker] info
+line still appears in agent-zero logs (handy for live monitoring),
+but DO NOT POST to /track — let the probe be the single source of
+truth for /usage accumulation.
 """
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-import requests
 import logging
 from helpers.extension import Extension
 
 logger = logging.getLogger(__name__)
 
-TELEGRAM_BRIDGE_URL = "http://telegram-bridge:8443/track"
 _callback_registered = False
 
 
@@ -74,22 +88,12 @@ class UsageLogger(CustomLogger):
                 f"cache_read={cache_read}, cache_creation={cache_creation}"
             )
 
-            # webhook 전송 (fire-and-forget, 실패해도 에이전트에 영향 없음)
-            # 신규 필드(cache_read/creation)는 기존 receiver가 무시해도 호환됨.
-            try:
-                requests.post(
-                    TELEGRAM_BRIDGE_URL,
-                    json={
-                        "model": model,
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "cache_read_tokens": cache_read,
-                        "cache_creation_tokens": cache_creation,
-                    },
-                    timeout=3,
-                )
-            except Exception:
-                pass
+            # NOTE: /track POST removed in PR #62 — probe now POSTs from its
+            # async/sync wrappers (PR #54 + #61). Two posters → bridge's
+            # usage_today double-counted (verified: /usage 34 Sonnet calls vs
+            # /today 17, exact 2x). Probe is the single source of truth for
+            # /usage now; this callback retains its info-log line for live
+            # monitoring in agent-zero stdout.
 
         except Exception as e:
             logger.debug(f"UsageTracker error: {e}")
