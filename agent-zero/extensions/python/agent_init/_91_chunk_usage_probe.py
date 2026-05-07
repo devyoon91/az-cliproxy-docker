@@ -62,6 +62,7 @@ TELEGRAM_BRIDGE_URL = "http://telegram-bridge:8443/track"
 
 
 _original_acompletion = None
+_original_completion = None
 _patched = False
 
 
@@ -315,18 +316,184 @@ async def _wrapped_acompletion(*args, **kwargs):
     return result
 
 
+def _wrap_sync_stream(wrapper, model_name: str):
+    """Sync generator mirror of `_wrap_stream` — covers AZ's `_stream`
+    path in models.py (line 427) and any other code path that calls
+    `litellm.completion(stream=True, ...)`. Same chunks-with-usage
+    extraction; sync I/O instead of async.
+
+    Why this exists alongside the async one: AZ's models.py exposes
+    BOTH `_stream` (sync) and `_astream` (async). Some LangChain
+    internals + plugin tooling end up on the sync path, so usage from
+    those calls bypassed our async wrapper completely (issue #56).
+    """
+    acc: dict = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    n_chunks = 0
+    n_swallowed = 0
+    n_drained = 0
+    try:
+        for chunk in wrapper:
+            n_chunks += 1
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                n_swallowed += 1
+                continue
+            yield chunk
+    finally:
+        # Drain to pull final message_delta into wrapper.chunks (sync version
+        # of the async-side defensive drain).
+        try:
+            while True:
+                try:
+                    drained = next(wrapper)
+                    n_drained += 1
+                    _ = drained
+                except StopIteration:
+                    break
+                except Exception:
+                    break
+        except Exception:
+            pass
+        try:
+            if hasattr(wrapper, "close"):
+                wrapper.close()
+        except Exception:
+            pass
+        try:
+            inner_chunks = getattr(wrapper, "chunks", None) or []
+            n_with_usage = 0
+            for c in inner_chunks:
+                extra = getattr(c, "model_extra", None) or getattr(c, "__pydantic_extra__", None)
+                u = None
+                if isinstance(extra, dict):
+                    u = extra.get("usage")
+                if u is None:
+                    u = getattr(c, "usage", None)
+                if u is not None:
+                    n_with_usage += 1
+                _merge_chunk_usage(c, acc)
+
+            if acc["prompt_tokens"] > 0 or acc["completion_tokens"] > 0:
+                acc["model"] = model_name
+                last_stream_usage.set(acc)
+                if requests is not None:
+                    try:
+                        requests.post(
+                            TELEGRAM_BRIDGE_URL,
+                            json={
+                                "model": model_name,
+                                "input_tokens": acc["prompt_tokens"],
+                                "output_tokens": acc["completion_tokens"],
+                                "cache_read_tokens": acc["cache_read_input_tokens"],
+                                "cache_creation_tokens": acc["cache_creation_input_tokens"],
+                            },
+                            timeout=3,
+                        )
+                    except Exception:
+                        pass
+                print(
+                    f"[SyncStreamUsageCapture] model={model_name} "
+                    f"in={acc['prompt_tokens']} out={acc['completion_tokens']} "
+                    f"cache_read={acc['cache_read_input_tokens']} "
+                    f"cache_creation={acc['cache_creation_input_tokens']} "
+                    f"chunks={n_chunks} inner={len(inner_chunks)} drained={n_drained} "
+                    f"usage_chunks={n_with_usage} swallowed={n_swallowed}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[SyncStreamUsageCapture] NO USAGE model={model_name} "
+                    f"chunks={n_chunks} inner={len(inner_chunks)} "
+                    f"usage_chunks={n_with_usage} swallowed={n_swallowed}",
+                    flush=True,
+                )
+        except Exception as e:
+            print(f"[SyncStreamUsageCapture] aggregation error: {e}", flush=True)
+
+
+def _wrapped_completion(*args, **kwargs):
+    """Sync mirror of `_wrapped_acompletion`. Same two-mode behavior:
+    stream → wrap iterator and harvest usage at end; non-stream →
+    extract usage from `result.usage` directly.
+
+    Closes issue #56's gap where sync `litellm.completion` calls
+    bypassed our async-only wrapper, leaking ~5x of Haiku usage on
+    Anthropic Console.
+    """
+    if kwargs.get("stream"):
+        opts = dict(kwargs.get("stream_options") or {})
+        opts["include_usage"] = True
+        kwargs["stream_options"] = opts
+    result = _original_completion(*args, **kwargs)
+    if kwargs.get("stream"):
+        return _wrap_sync_stream(result, kwargs.get("model", "unknown"))
+
+    # Non-stream sync — same shape as the async non-stream branch.
+    try:
+        usage = _extract_usage(result)
+        if usage and (usage["prompt_tokens"] > 0 or usage["completion_tokens"] > 0):
+            model_name = kwargs.get("model", "unknown")
+            usage["model"] = model_name
+            last_stream_usage.set(usage)
+            if requests is not None:
+                try:
+                    requests.post(
+                        TELEGRAM_BRIDGE_URL,
+                        json={
+                            "model": model_name,
+                            "input_tokens": usage["prompt_tokens"],
+                            "output_tokens": usage["completion_tokens"],
+                            "cache_read_tokens": usage["cache_read_input_tokens"],
+                            "cache_creation_tokens": usage["cache_creation_input_tokens"],
+                        },
+                        timeout=3,
+                    )
+                except Exception:
+                    pass
+            print(
+                f"[SyncNonStreamUsageCapture] model={model_name} "
+                f"in={usage['prompt_tokens']} out={usage['completion_tokens']} "
+                f"cache_read={usage['cache_read_input_tokens']} "
+                f"cache_creation={usage['cache_creation_input_tokens']}",
+                flush=True,
+            )
+    except Exception as e:
+        print(f"[SyncNonStreamUsageCapture] extract failed: {e}", flush=True)
+
+    return result
+
+
 class StreamUsageCapture(Extension):
     def execute(self, **kwargs):
-        global _original_acompletion, _patched
+        global _original_acompletion, _original_completion, _patched
         if _patched:
             return
+
+        # Async — chat_model streaming, util via _astream
         _original_acompletion = litellm.acompletion
         litellm.acompletion = _wrapped_acompletion
-        # Also re-point models.acompletion which is already imported
+
+        # Sync — _stream path in models.py (line 427) + any LangChain /
+        # plugin code that hits litellm.completion directly (issue #56).
+        _original_completion = litellm.completion
+        litellm.completion = _wrapped_completion
+
+        # Re-point models.{acompletion,completion} which were imported
+        # by reference at AZ module load — the litellm.* assignment alone
+        # doesn't reach the already-bound names.
         try:
             import models as _az_models
             _az_models.acompletion = _wrapped_acompletion
+            _az_models.completion = _wrapped_completion
         except Exception:
             pass
         _patched = True
-        print("[StreamUsageCapture] wrapped litellm.acompletion", flush=True)
+        print(
+            "[StreamUsageCapture] wrapped litellm.acompletion + litellm.completion",
+            flush=True,
+        )
