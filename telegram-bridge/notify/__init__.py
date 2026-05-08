@@ -10,6 +10,6 @@ typing-indicator helper, document-send wrappers, multi-chat router)
 can grow alongside it without renaming.
 """
 
-from .telegram import configure, send_telegram
+from .telegram import configure, send_document, send_telegram
 
-__all__ = ["configure", "send_telegram"]
+__all__ = ["configure", "send_telegram", "send_document"]

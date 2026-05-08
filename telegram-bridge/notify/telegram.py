@@ -92,3 +92,32 @@ async def send_telegram(
                     logger.error(f"[telegram] plain fallback also failed: {e2}")
             else:
                 logger.error(f"[telegram] send failed: {e}")
+
+
+async def send_document(
+    document,
+    *,
+    filename: str | None = None,
+    caption: str | None = None,
+) -> None:
+    """Send a file/document to the configured chat.
+
+    Thin wrapper around `Bot.send_document` so callers (cmd_logs,
+    cmd_docs, cmd_backup) don't need to reach for `tg_bot` + CHAT_ID
+    globals — same configure() injection as send_telegram. No-op when
+    bot/chat_id unconfigured (early-boot or test).
+
+    `document` can be anything telegram-bot's send_document accepts:
+    a `BytesIO`, an open file handle, or a path-like object.
+    """
+    if _bot is None or _chat_id is None:
+        return
+    try:
+        await _bot.send_document(
+            chat_id=_chat_id,
+            document=document,
+            filename=filename,
+            caption=caption,
+        )
+    except Exception as e:
+        logger.error(f"[telegram] send_document failed: {e}")

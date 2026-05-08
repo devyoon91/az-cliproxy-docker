@@ -465,31 +465,16 @@ async def check_agent_zero_status() -> str:
 
 
 # ── Telegram handlers ──
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != CHAT_ID:
-        await update.message.reply_text("권한이 없습니다.")
-        return
-    await update.message.reply_text(
-        "Agent Zero Telegram Bridge\n\n"
-        "사용법:\n"
-        "• 메시지 전송 → Agent Zero에 지시\n"
-        "• /status → 상태 확인\n"
-        "• /chats → 채팅 목록\n"
-        "• /switch [번호] → 채팅 전환\n"
-        "• /new → 새 대화 시작\n"
-        "• /logs → 전체 로그 파일 전송\n"
-        "• /docs → 문서 목록/열람\n"
-        "• /usage → 세션 내 토큰/비용 (휘발성)\n"
-        "• /today → 오늘의 태스크 집계 (task JSON 기반)\n"
-        "• /week → 최근 7일 집계\n"
-        "• /tasks [N] → 최근 N개 태스크 목록\n"
-        "• /backup → 설정 백업 파일 전송\n"
-        "• /monitor_on → 모니터링 켜기\n"
-        "• /monitor_off → 모니터링 끄기\n"
-        "• /track_chat_on → 채팅 자동 추적 켜기 (웹 UI 채팅 전환 따라감)\n"
-        "• /track_chat_off → 채팅 자동 추적 끄기 (현재 채팅 고정)\n"
-        "• /help → 도움말"
-    )
+# `/start` and `/help` moved to telegram_handlers/system.py (issue #79
+# Phase O); `/docs` moved to telegram_handlers/files.py (uses
+# notify.send_document). `/status` stays here for now since it calls
+# `check_agent_zero_status()` which still reaches monitor state globals.
+from telegram_handlers.files import cmd_docs as _cmd_docs_external  # noqa: E402
+from telegram_handlers.system import cmd_help as _cmd_help_external  # noqa: E402
+from telegram_handlers.system import cmd_start as _cmd_start_external  # noqa: E402
+cmd_start = _cmd_start_external
+cmd_help = _cmd_help_external
+cmd_docs = _cmd_docs_external
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -707,84 +692,6 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text(f"로그 조회 실패: {str(e)}")
-
-
-async def cmd_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """문서 목록 조회 및 파일 전송"""
-    import os
-    import io
-
-    if update.effective_chat.id != CHAT_ID:
-        return
-
-    # 문서 파일 목록
-    doc_files = {}
-    for f in ["GUIDE.md", "README.md"]:
-        path = f"/app/{f}"
-        if os.path.exists(path):
-            doc_files[f] = path
-
-    docs_dir = "/app/docs"
-    if os.path.isdir(docs_dir):
-        for f in sorted(os.listdir(docs_dir)):
-            if f.endswith(".md"):
-                doc_files[f"docs/{f}"] = os.path.join(docs_dir, f)
-
-    if not doc_files:
-        await update.message.reply_text("문서를 찾을 수 없습니다.")
-        return
-
-    args = context.args
-    if not args:
-        # 목록 표시
-        lines = ["📚 문서 목록:\n"]
-        for i, name in enumerate(doc_files.keys(), 1):
-            lines.append(f"  {i}. {name}")
-        lines.append("\n문서 보기: /docs [번호]")
-        lines.append("전체 다운로드: /docs all")
-        await update.message.reply_text("\n".join(lines))
-        return
-
-    if args[0].lower() == "all":
-        # 전체 파일 전송
-        for name, path in doc_files.items():
-            with open(path, "rb") as f:
-                await tg_bot.send_document(
-                    chat_id=CHAT_ID,
-                    document=f,
-                    filename=name.replace("/", "_"),
-                    caption=f"📄 {name}",
-                )
-        return
-
-    try:
-        idx = int(args[0]) - 1
-        keys = list(doc_files.keys())
-        if idx < 0 or idx >= len(keys):
-            await update.message.reply_text(f"1~{len(keys)} 범위에서 선택하세요.")
-            return
-
-        name = keys[idx]
-        path = doc_files[name]
-
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # 텔레그램 메시지로 보내기 (4000자 이하면 텍스트, 초과면 파일)
-        if len(content) <= 4000:
-            await update.message.reply_text(f"📄 **{name}**\n\n{content}")
-        else:
-            # 파일로 전송
-            doc_file = io.BytesIO(content.encode("utf-8"))
-            doc_file.name = name.replace("/", "_")
-            await tg_bot.send_document(
-                chat_id=CHAT_ID,
-                document=doc_file,
-                caption=f"📄 {name} ({len(content)} 글자)",
-            )
-
-    except ValueError:
-        await update.message.reply_text("숫자 또는 'all'을 입력하세요. 예: /docs 1")
 
 
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1109,39 +1016,6 @@ async def cmd_verbose_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔇 상세 모니터 꺼짐: 진행 중엔 조용, 완료 시 답변+메트릭만."
     )
 
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != CHAT_ID:
-        return
-    await update.message.reply_text(
-        "📖 명령어 목록:\n\n"
-        "대화:\n"
-        "  /new → 새 대화 시작\n"
-        "  /chats → 채팅 목록 조회\n"
-        "  /switch [번호] → 채팅 전환\n"
-        "  /logs → 전체 로그 파일 전송\n"
-        "  /docs → 문서 목록 조회\n"
-        "  /docs [번호] → 문서 열람\n"
-        "  /docs all → 전체 문서 다운로드\n"
-        "  일반 메시지 → Agent Zero에 지시\n\n"
-        "모니터링:\n"
-        "  /monitor_on → 웹 채팅 알림 켜기 (현재 시점부터)\n"
-        "  /monitor_off → 웹 채팅 알림 끄기\n"
-        "  /track_chat_on → 채팅 자동 추적 켜기 (웹 UI 채팅 전환 따라감)\n"
-        "  /track_chat_off → 채팅 자동 추적 끄기 (현재 채팅 고정)\n"
-        "  /verbose_on → 진행 중 AZ 활동 로그도 보기 (디버그용)\n"
-        "  /verbose_off → 진행 중엔 조용히, 완료 시만 알림 (기본)\n\n"
-        "상태/비용:\n"
-        "  /status → Agent Zero 상태 확인\n"
-        "  /usage → 세션 내 토큰/비용 (bridge 재시작 시 초기화)\n"
-        "  /today → 오늘의 태스크 집계 (영구 데이터)\n"
-        "  /week → 최근 7일 일별 + 합계\n"
-        "  /tasks [N] → 최근 N개 태스크 목록 (기본 10)\n"
-        "  /budget [day|week] [USD] → 예산 한도 + 자동 알림\n"
-        "  /pricing [list|diff|snapshot] → LiteLLM 가격 스냅샷 + drift\n"
-        "  /backup → 설정 경량 백업 (ZIP 파일 전송)\n"
-        "  /help → 도움말"
-    )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
