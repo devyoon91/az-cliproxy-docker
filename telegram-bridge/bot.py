@@ -956,121 +956,19 @@ from budget.core import alert_key as _alert_key  # noqa: F401  # legacy name
 from budget.core import format_alert as _format_budget_alert  # noqa: F401
 
 
-def _compute_window_cost(window: str) -> dict:
-    """Sum cost over a window from on-disk task JSONs.
-
-    Authoritative source — uses the same `_aggregate` pipeline as /today
-    /week, so budget alerts and dashboards never disagree. Going through
-    `usage_today` (RAM-only) would miss any in-progress task and wouldn't
-    survive a bridge restart.
-
-    Returns:
-        {
-          "cost_usd":  float,
-          "tasks":     int,
-          "top_model": (name, cost) | None,
-          "period_id": str,        # for cooldown key
-          "label":     str,        # human-readable for the alert text
-        }
-    """
-    now = _kst_now()
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if window == "day":
-        start = today
-        end = today + timedelta(days=1)
-        period_id = today.strftime("%Y-%m-%d")
-        label = f"오늘 ({period_id} KST)"
-    elif window == "week":
-        start = today - timedelta(days=6)
-        end = today + timedelta(days=1)
-        # ISO week — naturally rotates Mon→Mon, but we just want a stable
-        # bucket for cooldown so 7-day rolling window's date string is fine.
-        period_id = today.strftime("%G-W%V")
-        label = f"최근 7일 ({start.strftime('%m-%d')}~{today.strftime('%m-%d')} KST)"
-    else:
-        raise ValueError(f"unknown window: {window!r}")
-
-    tasks = _filter_date_range(_load_task_jsons(), start, end)
-    agg = _aggregate(tasks)
-    by_model = agg.get("by_model") or {}
-    top = None
-    if by_model:
-        m, b = max(by_model.items(), key=lambda kv: kv[1]["cost"])
-        top = (m, b["cost"])
-    return {
-        "cost_usd": float(agg["cost_usd"]),
-        "tasks": agg["tasks"],
-        "top_model": top,
-        "period_id": period_id,
-        "label": label,
-    }
-
-
-async def _budget_check_window(window: str) -> bool:
-    """Check one window's spend vs its limit. Fires at most ONE alert per
-    call (the highest crossed threshold). Cooldown: per (period_id, window,
-    threshold) — once today's 80% fires, won't fire again today even if
-    spend keeps climbing.
-
-    Returns True if any alert was sent (useful for tests / hourly logging).
-    """
-    limit_key = f"{window}_limit_usd"
-    limit = _budget.get(limit_key)
-    if not limit or limit <= 0:
-        return False
-    info = _compute_window_cost(window)
-    cost = info["cost_usd"]
-    if cost <= 0:
-        return False
-    ratio = cost / float(limit)
-    period_id = info["period_id"]
-
-    fired = _budget.setdefault("alerts_fired", {})
-    sent_any = False
-    # Walk thresholds high-to-low; fire the highest one crossed that hasn't
-    # been fired yet for this period. Mark all lower not-yet-fired thresholds
-    # as fired too so we don't trigger a cascade on the next call.
-    for thresh, level_label, pct_label in BUDGET_THRESHOLDS:
-        key = _alert_key(window, pct_label, period_id)
-        if ratio >= thresh and key not in fired:
-            if not sent_any:
-                msg = _format_budget_alert(window, info, float(limit), level_label, ratio)
-                try:
-                    await send_telegram(msg)
-                    sent_any = True
-                except Exception as e:
-                    logger.warning(f"[budget] alert send failed: {e}")
-                    return False
-            fired[key] = True
-    if sent_any:
-        _save_budget()
-    return sent_any
-
-
-async def budget_check_all() -> None:
-    """Public entrypoint: check both day + week windows. Wired into
-    /track (per-call) and the hourly sweep (catches missed alerts and
-    week-rollover edge cases)."""
-    try:
-        await _budget_check_window("day")
-        await _budget_check_window("week")
-    except Exception as e:
-        logger.warning(f"[budget] sweep error: {e}")
-
-
-async def hourly_budget_sweep() -> None:
-    """Hourly background task. Defensive — `_budget_check_window` is also
-    called from /track, but that path can be skipped if AZ batches /track
-    or fails-quiet. Hourly cadence is plenty for a 24h-budget signal."""
-    logger.info("Hourly budget sweep started")
-    while True:
-        try:
-            await asyncio.sleep(3600)  # 1 hour
-            await budget_check_all()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"[budget] hourly sweep error: {e}")
+# Async budget engine moved to `budget/engine.py` (issue #79 Phase K).
+# Telegram alert callback wired in main() via `budget.engine.configure(
+# send_alert=send_telegram)` so the engine module stays import-clean of
+# the telegram bot. Re-exported below for the existing call sites
+# (`usage_track_handler` → `budget_check_all`, post_init scheduler →
+# `hourly_budget_sweep`, `cmd_budget` → `_budget_check_window`,
+# `_compute_window_cost`).
+from budget.engine import (  # noqa: E402, F401
+    _budget_check_window,
+    _compute_window_cost,
+    budget_check_all,
+    hourly_budget_sweep,
+)
 
 
 # ── Pricing drift detection (M5-C · issue #21) ──
@@ -1744,6 +1642,13 @@ def main():
     # accepting /track requests (which trigger budget_check_all). Otherwise
     # the first /track after restart would use empty defaults and skip alerts.
     _load_budget()
+
+    # Wire the telegram alert callback into the carved-out budget engine
+    # (issue #79 Phase K). Without this, `_budget_check_window` would log
+    # but skip the actual alert send. Done here so it's set before the
+    # webhook server accepts its first /track.
+    import budget.engine
+    budget.engine.configure(send_alert=send_telegram)
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
