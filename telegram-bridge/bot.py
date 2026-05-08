@@ -201,60 +201,12 @@ from pricing.usage import (
 )
 
 
-# ── Telegram 메시지 전송 헬퍼 ──
-async def send_telegram(
-    text: str,
-    parse_mode: str | None = None,
-    fallback_text: str | None = None,
-):
-    """Send `text` to Telegram with optional `parse_mode` (HTML / Markdown).
-
-    `fallback_text` (recommended when parse_mode is set): a plain-text
-    version sent if Telegram rejects the formatted payload with a parse
-    error. Useful when AZ output produces malformed HTML/markdown despite
-    our converter — better the user gets the raw text than nothing.
-
-    Long messages (>4000 chars) are split. The fallback is only retried
-    for the chunk that actually failed parsing; other chunks aren't
-    re-sent so the user doesn't get duplicates.
-    """
-    if not tg_bot or not text.strip():
-        return
-
-    chunks = (
-        [text[i : i + 4000] for i in range(0, len(text), 4000)]
-        if len(text) > 4000 else [text]
-    )
-    fallback_chunks = None
-    if fallback_text and len(text) > 4000:
-        fallback_chunks = [
-            fallback_text[i : i + 4000] for i in range(0, len(fallback_text), 4000)
-        ]
-
-    for idx, chunk in enumerate(chunks):
-        try:
-            await tg_bot.send_message(
-                chat_id=CHAT_ID, text=chunk, parse_mode=parse_mode
-            )
-        except Exception as e:
-            err = str(e).lower()
-            # Telegram returns "Bad Request: can't parse entities" on bad
-            # HTML/Markdown. Retry the SAME chunk in plain mode.
-            if parse_mode and ("can't parse" in err or "parse entities" in err):
-                fb = (
-                    fallback_chunks[idx] if fallback_chunks
-                    else (fallback_text if fallback_text and len(chunks) == 1 else chunk)
-                )
-                logger.warning(
-                    f"[telegram] parse_mode={parse_mode} rejected, "
-                    f"retrying chunk {idx} as plain"
-                )
-                try:
-                    await tg_bot.send_message(chat_id=CHAT_ID, text=fb)
-                except Exception as e2:
-                    logger.error(f"[telegram] plain fallback also failed: {e2}")
-            else:
-                logger.error(f"[telegram] send failed: {e}")
+# `send_telegram` moved to `notify/telegram.py` (issue #79 Phase L).
+# Re-exported here for the ~30 call sites still in bot.py (cmd handlers,
+# monitor loop, streaming-edit path, webhook handlers). The Bot instance
+# + CHAT_ID get wired into the carved-out module from `post_init` once
+# Application.bot is available — search for `notify.telegram.configure`.
+from notify.telegram import send_telegram  # noqa: E402, F401
 
 
 # `fetch_chat_list` and `sync_log_version` moved to
@@ -1624,6 +1576,14 @@ async def daily_usage_reporter():
 async def post_init(application: Application):
     global tg_bot
     tg_bot = application.bot
+
+    # Wire the Bot instance into the carved-out send_telegram module
+    # (issue #79 Phase L). bot.py keeps its own `tg_bot` global pointing
+    # at the SAME Bot object for the streaming + cmd_logs/docs/backup
+    # paths that still reach for `tg_bot.send_document` etc.
+    import notify.telegram
+    notify.telegram.configure(bot=application.bot, chat_id=CHAT_ID)
+
     asyncio.create_task(monitor_agent_zero())
     asyncio.create_task(daily_usage_reporter())
     # M5-A: hourly budget sweep — defensive double-check on top of the

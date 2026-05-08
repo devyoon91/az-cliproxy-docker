@@ -15,5 +15,6 @@ COPY dashboard/ ./dashboard/
 COPY render/ ./render/
 COPY az_client/ ./az_client/
 COPY telegram_handlers/ ./telegram_handlers/
+COPY notify/ ./notify/
 
 CMD ["python", "bot.py"]
