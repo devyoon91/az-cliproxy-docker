@@ -52,3 +52,10 @@ jobs:
         # substitution check — we want YAML/structure validation, not env
         # presence. Flag goes on the `config` subcommand, not on `compose`.
         run: docker compose config --no-interpolate -q
+
+      - name: preflight (docker-compose layering policy)
+        # Enforces issue #53: the main docker-compose.yml must not mount
+        # sibling-directory paths (`../...`) — those belong in the
+        # gitignored docker-compose.override.yml. Catches accidental
+        # paste of an override mount into the tracked file at PR time.
+        run: ./scripts/preflight.sh --quiet
