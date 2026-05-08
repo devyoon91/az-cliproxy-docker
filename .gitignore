@@ -38,3 +38,7 @@ agent-zero/usr-plugins/*
 !agent-zero/usr-plugins/.gitkeep
 !agent-zero/usr-plugins/chat_pdf_export/
 !agent-zero/usr-plugins/chat_pdf_export/**
+# Re-exclude the python bytecode caches that get regenerated inside
+# the plugin's bind-mount during normal runtime.
+agent-zero/usr-plugins/chat_pdf_export/**/__pycache__/
+agent-zero/usr-plugins/chat_pdf_export/**/*.pyc
