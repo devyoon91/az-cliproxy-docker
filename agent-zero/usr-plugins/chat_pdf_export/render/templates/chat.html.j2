@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+@page {
+    size: A4;
+    margin: 18mm 16mm 18mm 16mm;
+    @bottom-center {
+        content: counter(page) " / " counter(pages);
+        font-family: "Noto Sans CJK KR", sans-serif;
+        font-size: 9pt;
+        color: #888;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    font-family: "Noto Sans CJK KR", "Noto Sans CJK", sans-serif;
+    font-size: 10pt;
+    line-height: 1.55;
+    color: #111;
+    margin: 0;
+}
+
+header.doc {
+    border-bottom: 2px solid #333;
+    padding-bottom: 8mm;
+    margin-bottom: 8mm;
+}
+header.doc h1 {
+    font-size: 18pt;
+    margin: 0 0 2mm 0;
+    color: #111;
+}
+header.doc .meta {
+    font-size: 9pt;
+    color: #666;
+}
+
+.msg {
+    margin: 0 0 6mm 0;
+    page-break-inside: avoid;
+}
+.msg .head {
+    font-size: 9pt;
+    color: #555;
+    border-bottom: 1px dotted #ccc;
+    padding-bottom: 1mm;
+    margin-bottom: 2mm;
+}
+.msg .head .role {
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.msg.user .head .role { color: #1455a0; }
+.msg.agent .head .role { color: #2a7a3e; }
+.msg.tool_call .head .role { color: #b06a00; }
+.msg.tool_result .head .role { color: #6a4f00; }
+
+.msg .body {
+    padding-left: 4mm;
+    border-left: 2px solid transparent;
+}
+.msg.user .body { border-left-color: #1455a0; }
+.msg.agent .body { border-left-color: #2a7a3e; }
+.msg.tool_call .body { border-left-color: #b06a00; background: #fdf6e8; padding: 2mm 3mm; }
+.msg.tool_result .body { border-left-color: #6a4f00; background: #f8f4e8; padding: 2mm 3mm; }
+
+.msg pre {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    padding: 2mm 3mm;
+    font-family: "DejaVu Sans Mono", "Noto Sans Mono CJK KR", monospace;
+    font-size: 8.5pt;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+.msg code {
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: 9pt;
+    background: #f0f0f0;
+    padding: 0.5mm 1mm;
+    border-radius: 1mm;
+}
+.msg pre code { background: transparent; padding: 0; }
+.msg blockquote {
+    border-left: 3px solid #ccc;
+    margin: 2mm 0;
+    padding-left: 3mm;
+    color: #555;
+}
+.msg table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 2mm 0;
+    font-size: 9pt;
+}
+.msg th, .msg td {
+    border: 1px solid #ccc;
+    padding: 1mm 2mm;
+    text-align: left;
+    vertical-align: top;
+}
+.msg th { background: #f0f0f0; font-weight: bold; }
+
+footer.doc {
+    margin-top: 10mm;
+    padding-top: 4mm;
+    border-top: 1px dotted #ccc;
+    font-size: 8.5pt;
+    color: #888;
+}
+</style>
+</head>
+<body>
+
+<header class="doc">
+    <h1>{{ title }}</h1>
+    <div class="meta">
+        {% if created_at %}생성: {{ created_at }} · {% endif %}
+        메시지 {{ messages|length }}건
+    </div>
+</header>
+
+{% for m in messages %}
+<div class="msg {{ m.role }}">
+    <div class="head">
+        <span class="role">{{ m.role_label }}</span>
+        {% if m.ts %}<span style="color:#888"> · {{ m.ts }}</span>{% endif %}
+        {% if m.tool_name %}<span style="color:#888"> · {{ m.tool_name }}</span>{% endif %}
+    </div>
+    <div class="body">
+        {{ m.body_html|safe }}
+    </div>
+</div>
+{% endfor %}
+
+<footer class="doc">
+    Agent Zero · chat_pdf_export · 한국어 렌더 Noto Sans CJK KR
+</footer>
+
+</body>
+</html>
