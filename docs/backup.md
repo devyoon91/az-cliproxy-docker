@@ -16,6 +16,8 @@
 | **프롬프트** | `agent-zero/prompts/` | 커스텀 시스템 프롬프트 | 🟢 낮음 | config |
 | **프로필** | `agent-zero/agents/` | 에이전트 프로필 (developer, reviewer, devops) | 🟢 낮음 | config |
 | **스크립트** | `agent-zero/git-init.sh` | Git/GitHub CLI 초기화 | 🟢 낮음 | config |
+| **플러그인 상태** | `agent-zero/usr-plugins/_model_config/` | 모델 override (`config.json` 의 chat/utility 선택) — `--force-recreate` 시 휘발. `_browser/_office/...` 는 이미지 재생성으로 복구되므로 백업 제외 | 🟡 중간 | config |
+| **브리지 상태** | `telegram-bridge/data/` | `/budget` 한도, alert cooldown, 향후 가격 스냅샷 | 🟡 중간 | config |
 | **메모리** | `agent-zero/memory/` | FAISS 벡터 DB (장기 기억) | 🟡 중간 | full |
 | **작업물** | `agent-zero/work_dir/` | 프로젝트 파일, clone된 저장소 | 🟡 중간 | full |
 | **로그** | `agent-zero/logs/` | 채팅 로그 (HTML) | 🟢 낮음 | full |
@@ -31,10 +33,10 @@
 # 경량 백업 (설정 + 인증만)
 ./scripts/backup.sh light
 
-# 설정 백업 (설정 + 인증 + 프롬프트 + 프로필)
+# 설정 백업 (설정 + 인증 + 프롬프트 + 프로필 + 플러그인 상태 + 브리지 상태)
 ./scripts/backup.sh config
 
-# 전체 백업 (설정 + 인증 + 프롬프트 + 프로필 + 메모리 + 작업물 + 로그)
+# 전체 백업 (config + 메모리 + 작업물 + 로그)
 ./scripts/backup.sh full
 ```
 
@@ -92,7 +94,7 @@ docker compose up -d --build
 | 모드 | 대상 | 크기 | 용도 |
 |------|------|------|------|
 | **light** | 설정 + 인증 | 수 KB | 다른 PC에서 빠르게 복원 |
-| **config** | light + 프롬프트 + 프로필 | 수십 KB | 커스텀 설정 전체 보존 |
+| **config** | light + 프롬프트 + 프로필 + 플러그인 상태 + 브리지 상태 | 수십 KB ~ 수 MB | 커스텀 설정 + `--force-recreate` 안전망 |
 | **full** | config + 메모리 + 작업물 + 로그 | 수 MB+ | 완전한 상태 복원 |
 | **telegram** | 설정 + 문서 + 사용량 | 수십 KB | 폰에서 원격 백업 |
 

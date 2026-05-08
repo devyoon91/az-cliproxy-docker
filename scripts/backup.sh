@@ -34,11 +34,27 @@ BACKUP_DIRS_AUTH=(
     "cliproxy/auth"
 )
 
-# config: 프롬프트 + 프로필
+# config: 프롬프트 + 프로필 + 사용자 플러그인 상태 + 브리지 영구 상태
+#
+# usr-plugins/ 의 하위에는:
+#   - _model_config/config.json — 활성 chat/utility model 선택 (사용자 상태,
+#     `--force-recreate` 시 휘발 위험, 1KB 미만)
+#   - _browser/, _office/, docker_terminal/, stop_process/ — 업스트림 이미지가
+#     첫 실행 때 복사하는 vendored 자산 (수백 MB의 playwright 바이너리 포함,
+#     이미지 재생성으로 복구 가능 → 백업 불필요)
+#   - chat_pdf_export/, dashboard_link/ — 이 repo 의 git 추적 코드 (백업 불필요)
+# 따라서 _model_config/ 만 명시적으로 포함. 향후 다른 플러그인이 영구 상태를
+# 추가하면 그 플러그인의 state 디렉토리를 여기 명시적으로 추가한다.
+#
+# telegram-bridge/data/ 는 /budget 한도 + alert cooldown 같은 영구 데이터를
+# 들고 있고, docker-compose 상에서 :ro 가 아니라 read-write 로 마운트된다.
+# `--force-recreate` 한 번이면 의도와 무관하게 휘발될 수 있다.
 BACKUP_DIRS_CONFIG=(
     "agent-zero/prompts"
     "agent-zero/agents"
     "agent-zero/git-init.sh"
+    "agent-zero/usr-plugins/_model_config"
+    "telegram-bridge/data"
 )
 
 # full: 메모리 + 로그 + 작업물
