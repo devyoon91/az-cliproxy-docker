@@ -58,4 +58,9 @@ jobs:
         # sibling-directory paths (`../...`) — those belong in the
         # gitignored docker-compose.override.yml. Catches accidental
         # paste of an override mount into the tracked file at PR time.
-        run: ./scripts/preflight.sh --quiet
+        #
+        # Invoked via `bash` (not `./script.sh`) because the executable
+        # bit doesn't always survive cross-platform commits — Windows
+        # devs see `git diff --summary` show "100644" and the +x bit
+        # never makes it to the index. `bash file` is portable.
+        run: bash scripts/preflight.sh --quiet
