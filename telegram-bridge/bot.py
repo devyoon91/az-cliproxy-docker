@@ -92,82 +92,18 @@ from render.monitor import short_id as _short_id  # noqa: E402
 from render import md_to_telegram_html  # noqa: F401
 
 
-# ── Monitor message streaming state ──
-# Per AZ context, track the last Telegram message we sent for the active
-# AZ "turn" so subsequent log entries from the same turn extend that message
-# (via editMessageText) instead of arriving as separate Telegram messages.
-# An AZ turn typically emits 5–7 logs (info → tool → code_exe → tool result
-# → response); without this, every poll cycle's logs went out as their own
-# message, producing visual fragmentation.
+# Per-AZ-context streaming-edit Telegram message machinery
+# (`streaming_msg_id`, `streaming_text`, `STREAM_MAX_CHARS`,
+# `stream_reset`, `stream_extend`) moved to `streaming/edit.py`
+# (issue #79 Phase R). The Bot instance + CHAT_ID get wired in
+# `post_init` via `streaming.configure(bot=..., chat_id=...)`.
 #
-# Boundaries (when to stop editing and start a new message):
-#   • A `user`-type log appears in the poll batch — that's a new turn
-#   • Telegram's 4096-char limit hit — close current, open next
-#   • Active chat switches (/switch, /new, monitor auto-follow)
-#   • Edit fails for any non-recoverable reason — fall back to send-new
-streaming_msg_id: dict[str, int] = {}   # ctx_key → Telegram message_id
-streaming_text: dict[str, str] = {}     # ctx_key → text we last sent/edited
-
-# Telegram's hard cap is 4096 chars; leave headroom for the next chunk join
-# and any sneaky widening from formatter changes.
-STREAM_MAX_CHARS = 3800
-
-
-def _stream_reset(ctx_key: str) -> None:
-    """Forget the active streamed message for `ctx_key`. Next chunk will
-    send a brand-new Telegram message. Safe to call when no state exists."""
-    streaming_msg_id.pop(ctx_key, None)
-    streaming_text.pop(ctx_key, None)
-
-
-async def _stream_extend(ctx_key: str, new_chunk: str) -> None:
-    """Append `new_chunk` to the active streamed message — editing it
-    in place. Falls back to a brand-new send when:
-      • There's no active message yet
-      • The edit would push past STREAM_MAX_CHARS (so we close + reopen)
-      • Telegram refuses the edit (message too old, deleted, etc.)
-    """
-    if not new_chunk or tg_bot is None:
-        return
-
-    cur_text = streaming_text.get(ctx_key, "")
-    cur_msg_id = streaming_msg_id.get(ctx_key)
-    sep = "\n\n" if cur_text else ""
-    extended = cur_text + sep + new_chunk
-
-    # Length cap — finalize current message, start a fresh one with new_chunk.
-    if cur_msg_id and len(extended) > STREAM_MAX_CHARS:
-        cur_msg_id = None
-        cur_text = ""
-        extended = new_chunk
-
-    if cur_msg_id:
-        try:
-            await tg_bot.edit_message_text(
-                chat_id=CHAT_ID,
-                message_id=cur_msg_id,
-                text=extended,
-            )
-            streaming_text[ctx_key] = extended
-            return
-        except Exception as e:
-            # "Message is not modified" is a no-op success; everything else
-            # means the message can't be edited (too old / deleted / rate
-            # limit). Drop state and fall through to send-new — better the
-            # user gets a fresh message than no update at all.
-            err = str(e).lower()
-            if "not modified" in err:
-                return
-            logger.debug(f"[stream] edit failed for {ctx_key!r}: {e}; sending new")
-            _stream_reset(ctx_key)
-
-    # Send-new path (also taken when length cap forced a fresh message).
-    try:
-        msg = await tg_bot.send_message(chat_id=CHAT_ID, text=new_chunk)
-        streaming_msg_id[ctx_key] = msg.message_id
-        streaming_text[ctx_key] = new_chunk
-    except Exception as e:
-        logger.error(f"[stream] send failed: {e}")
+# Underscore prefixes dropped in the move: `_stream_reset` →
+# `stream_reset`, `_stream_extend` → `stream_extend`. They WERE the
+# public surface of bot.py's streaming block, just unexported by
+# convention; in their own module they're properly public.
+from streaming import stream_extend as _stream_extend  # noqa: E402, F401
+from streaming import stream_reset as _stream_reset  # noqa: E402, F401
 
 
 # ── 토큰 사용량 추적 ──
@@ -472,118 +408,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status)
 
 
-# `/chats` moved to telegram_handlers/chat.py (issue #79 Phase Q) along
-# with the six monitor/track/verbose toggle handlers — they share the
-# same dep set (monitor.state + az_client.session + render.monitor).
-from telegram_handlers.chat import cmd_chats  # noqa: E402, F401
-
-
-async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """채팅 전환"""
-    if update.effective_chat.id != CHAT_ID:
-        return
-
-    args = context.args
-    if not args:
-        await update.message.reply_text("사용법: /switch [번호]\n/chats 로 목록을 먼저 확인하세요.")
-        return
-
-    try:
-        idx = int(args[0]) - 1
-    except ValueError:
-        await update.message.reply_text("숫자를 입력하세요. 예: /switch 1")
-        return
-
-    # 캐시된 목록 사용, 없으면 새로 조회
-    contexts = cached_contexts if cached_contexts else await fetch_chat_list()
-
-    if idx < 0 or idx >= len(contexts):
-        await update.message.reply_text(f"1~{len(contexts)} 범위에서 선택하세요.")
-        return
-
-    target = contexts[idx]
-    target_id = target.get("id", "")
-    target_name = target.get("name", "이름 없음")
-
-    # Close any in-progress stream tied to the previous chat before swapping.
-    _stream_reset(state.monitor_context or "_default")
-
-    state.az_context = target_id
-    state.monitor_context = target_id
-    state.monitor_log_guid = ""
-    # 현재 시점으로 스킵 (이전 히스토리 전송 방지)
-    state.monitor_log_version = await sync_log_version(target_id)
-
-    await update.message.reply_text(f"✅ 채팅 전환: {target_name}\nID: {_short_id(target_id)}")
-
-
-async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Create a brand-new Agent Zero chat context and switch to it.
-
-    Previous behavior: just zeroed the local az_context / monitor_context and
-    relied on the next user message to lazily create a context. That meant:
-      - The reply "새 대화를 시작합니다" was misleading (no chat created yet)
-      - /chats wouldn't show the new chat until something was sent
-      - With monitor_auto_follow ON, the next poll would latch back onto
-        AZ's previously-active context — defeating the reset entirely
-
-    Fixed behavior: calls AZ's /api/chat_create (the same endpoint the web
-    UI's "New Chat" button uses), gets the real ctxid back, then pins both
-    az_context and monitor_context to it before replying.
-    """
-    if update.effective_chat.id != CHAT_ID:
-        return
-    msg = update.effective_message
-    if msg is None:
-        return
-
-    new_ctxid = ""
-    try:
-        session = await get_az_session()
-        headers = get_headers()
-        # Pass current_context so AZ can carry over project / model-override
-        # data per its chat_inherit_project setting (matches web UI behavior).
-        async with session.post(
-            f"{AZ_API_URL}{AZ_API_PREFIX}/chat_create",
-            json={"current_context": state.az_context or ""},
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            if resp.status == 403:
-                await close_az_session()
-                session = await get_az_session()
-                headers = get_headers()
-                async with session.post(
-                    f"{AZ_API_URL}{AZ_API_PREFIX}/chat_create",
-                    json={"current_context": state.az_context or ""},
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as retry:
-                    if retry.status == 200:
-                        new_ctxid = (await retry.json()).get("ctxid", "")
-            elif resp.status == 200:
-                new_ctxid = (await resp.json()).get("ctxid", "")
-    except Exception as e:
-        logger.error(f"chat_create failed: {e}")
-
-    if not new_ctxid:
-        await msg.reply_text("⚠️ 새 대화 생성 실패 — Agent Zero 응답 확인 필요.")
-        return
-
-    # Close any in-progress stream from the previous chat — new chat's logs
-    # should open their own message, not extend the old one.
-    _stream_reset(state.monitor_context or "_default")
-
-    state.az_context = new_ctxid
-    state.monitor_context = new_ctxid
-    state.monitor_log_guid = ""
-    # Skip past whatever log_version the new context starts at so we don't
-    # re-stream the (empty) initial state. This mirrors /switch behavior.
-    state.monitor_log_version = await sync_log_version(new_ctxid)
-
-    await msg.reply_text(
-        f"✅ 새 대화 시작됨\nID: {_short_id(new_ctxid)}"
-    )
+# /chats, /switch, /new + the six monitor toggles all live in
+# telegram_handlers/chat.py — Phase Q carved /chats + toggles, Phase R
+# completed the trio with /switch + /new (which needed the streaming
+# carve to land first since they call stream_reset).
+from telegram_handlers.chat import cmd_chats, cmd_new, cmd_switch  # noqa: E402, F401
 
 
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -993,10 +822,16 @@ async def post_init(application: Application):
 
     # Wire the Bot instance into the carved-out send_telegram module
     # (issue #79 Phase L). bot.py keeps its own `tg_bot` global pointing
-    # at the SAME Bot object for the streaming + cmd_logs/docs/backup
-    # paths that still reach for `tg_bot.send_document` etc.
+    # at the SAME Bot object for cmd_logs/cmd_backup paths that still
+    # reach for `tg_bot.send_document` etc.
     import notify.telegram
     notify.telegram.configure(bot=application.bot, chat_id=CHAT_ID)
+
+    # Same injection for the streaming-edit module (Phase R) — its
+    # stream_extend needs the Bot to call edit_message_text /
+    # send_message and return the new message_id.
+    import streaming
+    streaming.configure(bot=application.bot, chat_id=CHAT_ID)
 
     asyncio.create_task(monitor_agent_zero())
     asyncio.create_task(daily_usage_reporter())

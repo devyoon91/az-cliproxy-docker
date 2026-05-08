@@ -41,9 +41,11 @@ _ROOT = Path(__file__).resolve().parent.parent / "telegram-bridge"
 # file. Same pattern as test_bridge_webhooks.
 _OWN_MODULES = (
     "telegram", "telegram.ext",
+    "aiohttp",
     "az_client", "az_client.session",
     "monitor", "monitor.state",
     "render", "render.monitor",
+    "streaming",
     "telegram_handlers", "telegram_handlers.chat",
 )
 
@@ -72,14 +74,44 @@ def _wire_chat_module(monkeypatch):
         ext.ContextTypes = _CTX  # type: ignore[attr-defined]
         sys.modules["telegram.ext"] = ext
 
-    # Fake az_client.session — only the two names chat.py imports.
+    # Fake `aiohttp` — chat.py imports it for the cmd_new HTTP timeout
+    # context. We don't drive cmd_new in these tests so a no-op shim
+    # is enough; cmd_new behavior gets covered by an integration test
+    # later when we have a real aiohttp test harness.
+    if "aiohttp" not in sys.modules:
+        aiohttp_mod = types.ModuleType("aiohttp")
+
+        class _Timeout:
+            def __init__(self, *a, **kw):
+                pass
+
+        aiohttp_mod.ClientTimeout = _Timeout  # type: ignore[attr-defined]
+        sys.modules["aiohttp"] = aiohttp_mod
+
+    # Fake az_client.session — chat.py imports a fuller surface now
+    # (Phase R added cmd_switch/cmd_new which need cached_contexts,
+    # AZ_API_*, get_az_session, etc.). Return values get patched per
+    # test where needed.
     az_client_pkg = types.ModuleType("az_client")
     az_client_pkg.__path__ = [str(_ROOT / "az_client")]  # type: ignore[attr-defined]
     sys.modules["az_client"] = az_client_pkg
     session_mod = types.ModuleType("az_client.session")
+    session_mod.AZ_API_URL = "http://fake-az"
+    session_mod.AZ_API_PREFIX = "/api"
+    session_mod.cached_contexts = []
     session_mod.fetch_chat_list = AsyncMock(return_value=[])
     session_mod.sync_log_version = AsyncMock(return_value=42)
+    session_mod.get_az_session = AsyncMock()
+    session_mod.get_headers = lambda: {}
+    session_mod.close_az_session = AsyncMock()
     sys.modules["az_client.session"] = session_mod
+
+    # Fake streaming module — only `stream_reset` is hit by the toggle
+    # and /chats handlers. cmd_switch/cmd_new also call it; integration
+    # tests for those go in their own file (out of scope here).
+    streaming_pkg = types.ModuleType("streaming")
+    streaming_pkg.stream_reset = lambda ctx_key: None  # type: ignore[attr-defined]
+    sys.modules["streaming"] = streaming_pkg
 
     # Real monitor.state — mutating this is precisely what the handlers
     # do, so we want the genuine module here, not a stub.
