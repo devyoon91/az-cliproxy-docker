@@ -84,24 +84,13 @@ from az_client.session import (  # noqa: E402
 )
 
 
-def _short_id(ctx_id: str | None, max_len: int = 12) -> str:
-    """Render a context ID for display.
-
-    AZ's `helpers.guids.generate_id` defaults to length=8, so today's IDs
-    are already 8 chars total. The previous code did `id[:8] + "..."`
-    which was a UX lie — the ellipsis suggested truncation when nothing
-    had been truncated, and users couldn't tell where the ID ended.
-
-    Behavior:
-      - empty / None → "없음"
-      - len(id) <= max_len → return as-is, no ellipsis
-      - longer → truncate to max_len + "..." (real truncation, real marker)
-    """
-    if not ctx_id:
-        return "없음"
-    if len(ctx_id) <= max_len:
-        return ctx_id
-    return ctx_id[:max_len] + "..."
+# `_short_id` and `format_monitor_message` moved to `render/monitor.py`
+# (issue #79 Phase J). Re-exported for the call sites still in bot.py
+# (cmd_chats, cmd_switch, cmd_new, monitor_agent_zero, etc.). The new
+# `format_monitor_message` is pure — callers pass `verbose=monitor_verbose`
+# explicitly instead of the function reaching for the global.
+from render.monitor import format_monitor_message  # noqa: E402, F401
+from render.monitor import short_id as _short_id  # noqa: E402
 
 
 # Markdown → Telegram-HTML rendering moved to `render/markdown.py`
@@ -381,7 +370,9 @@ async def monitor_agent_zero():
                         await flush_pending()
                         _stream_reset(stream_key)
 
-                    formatted = format_monitor_message(log_type, heading, content)
+                    formatted = format_monitor_message(
+                        log_type, heading, content, verbose=monitor_verbose,
+                    )
                     if formatted:
                         pending.append(formatted)
 
@@ -396,48 +387,6 @@ async def monitor_agent_zero():
             continue
 
         await asyncio.sleep(3)
-
-
-def format_monitor_message(log_type: str, heading: str, content: str) -> str | None:
-    """로그 타입에 따라 Telegram 메시지 포맷.
-
-    Quiet mode (default, `monitor_verbose=False`): only `user` log types
-    echo through. The user-facing answer + metrics card are sent at task
-    completion via `task_report.py`'s `_post_task_response` /
-    `_post_task_summary`, so the in-progress monitor doesn't need to
-    repeat what's coming anyway.
-
-    Verbose mode (`monitor_verbose=True`, toggled via /verbose_on): every
-    log type formats and forwards as before — useful when debugging an
-    AZ profile or a stuck task.
-    """
-    if not content and not heading:
-        return None
-
-    if log_type == "user":
-        return f"👤 사용자: {content}"
-
-    if not monitor_verbose:
-        # Quiet path — let task completion drive the actual answer + metrics.
-        return None
-
-    if log_type in ("response", "ai", "agent"):
-        if len(content) > 2000:
-            content = content[:2000] + "\n...(생략)"
-        return f"🤖 Agent Zero:\n{content}"
-    elif log_type == "code_exe":
-        code_preview = content[:500] if content else ""
-        return f"⚙️ 코드 실행: {heading}\n```\n{code_preview}\n```"
-    elif log_type == "tool":
-        return f"🔧 도구: {heading}\n{content[:500] if content else ''}"
-    elif log_type == "info":
-        return f"ℹ️ {heading}: {content[:500] if content else ''}"
-    elif log_type == "error":
-        return f"❌ 오류: {heading}\n{content[:500] if content else ''}"
-    elif log_type == "warning":
-        return f"⚠️ 경고: {heading}\n{content[:500] if content else ''}"
-
-    return None
 
 
 # ── Agent Zero API: Telegram에서 직접 메시지 전송 ──
