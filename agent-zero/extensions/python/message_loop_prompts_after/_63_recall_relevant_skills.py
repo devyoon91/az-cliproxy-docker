@@ -27,8 +27,8 @@ Mounted into the container at the same upstream path so it overrides
 the default extension. See docker-compose.yml for the bind mount.
 """
 from agent import LoopData
-from helpers.extension import Extension
 from helpers import skills as skills_helper
+from helpers.extension import Extension
 
 
 def _augment_matches_korean(query: str, agent, base_matches):

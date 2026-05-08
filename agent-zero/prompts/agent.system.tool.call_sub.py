@@ -1,8 +1,7 @@
-import json
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from helpers import projects, subagents
 from helpers.files import VariablesPlugin
-from helpers import files, projects, subagents
-from helpers.print_style import PrintStyle
 
 if TYPE_CHECKING:
     from agent import Agent
@@ -31,4 +30,4 @@ class CallSubordinate(VariablesPlugin):
             return {"agent_profiles": profiles}
         else:
             return {"agent_profiles": None}
-        
+

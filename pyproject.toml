@@ -1,0 +1,59 @@
+[project]
+name = "az-cliproxy-docker"
+version = "0.0.0"
+description = "Agent Zero + CLIProxy + Telegram Bridge harness"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+# Only lint our authored code. Skip vendored copies that ride into
+# `agent-zero/usr-plugins/` from the upstream image (Playwright, office,
+# docker_terminal, stop_process — these are bind-mount artifacts, not
+# our source).
+extend-exclude = [
+    "agent-zero/usr-plugins/_browser",
+    "agent-zero/usr-plugins/_office",
+    "agent-zero/usr-plugins/_model_config",
+    "agent-zero/usr-plugins/docker_terminal",
+    "agent-zero/usr-plugins/stop_process",
+    "agent-zero/work_dir",
+    "agent-zero/memory",
+    "agent-zero/logs",
+    "backups",
+]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B"]
+ignore = [
+    # B008: false positives on FastAPI/Flask Depends() defaults — irrelevant here
+    # but keeps signal-to-noise high in mixed code.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# bot.py is a 3,579-line god-file scheduled for split in #79. Treat its
+# existing style as legacy — flag NEW issues by category but accept the
+# current unused-import / line-length / module-level-not-at-top noise
+# until the modular rewrite. New modules carved out of bot.py inherit
+# the default ruleset, surfacing real issues there.
+"telegram-bridge/bot.py" = [
+    "E402",  # module level imports not at top — bot.py interleaves imports + setup
+    "E501",  # line length — too pervasive to fix mid-refactor
+    "E731",  # lambda — only ~2 occurrences, low signal
+    "E722",  # bare except — defensive code in monitor loop
+    "F401",  # unused imports — refactor will catch these
+    "F811",  # redefined while unused — same
+    "F841",  # local variable assigned but never used
+    "B007",  # loop control variable not used
+    "B023",  # function defined in loop with closures
+    "B904",  # raise from — defensive code
+    "UP006", "UP007", "UP008", "UP015", "UP024", "UP028", "UP032", "UP035", "UP038",  # legacy idioms — auto-fix in #79
+    "I001",  # import sort — let #79 sort imports during the split
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = ["-ra", "--strict-markers"]

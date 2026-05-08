@@ -18,7 +18,6 @@ See agent-zero/lib/task_report.py and issue #1.
 from helpers.extension import Extension
 from helpers.task_report import sweep_orphans
 
-
 _swept_once = False
 
 

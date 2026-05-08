@@ -29,7 +29,6 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +150,7 @@ def compute_cost(
     cache_creation_tokens: int = 0,
     reasoning_tokens: int = 0,
 ) -> float:
-    """Compute total USD cost for one LLM call.
+    r"""Compute total USD cost for one LLM call.
 
     `input_tokens` here is LiteLLM's normalized `prompt_tokens`, which —
     contrary to an earlier assumption in this docstring — is the TOTAL

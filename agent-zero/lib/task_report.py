@@ -19,7 +19,7 @@ import os
 import time
 import uuid
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # ContextVar that the `_91_chunk_usage_probe` agent_init extension writes to
@@ -66,7 +66,7 @@ ENDED_ORPHANED = "orphaned"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _new_task_id() -> str:
@@ -159,7 +159,7 @@ def _write_report(report: dict, *, final: bool) -> None:
     try:
         snapshot = dict(report)
         started_ts = snapshot.get("started_ts")
-        if isinstance(started_ts, (int, float)):
+        if isinstance(started_ts, int | float):
             snapshot["elapsed_sec"] = round(time.time() - started_ts, 3)
         snapshot.pop("started_ts", None)
         snapshot["totals"] = _compute_totals(snapshot)
@@ -298,7 +298,9 @@ def tool_end(agent, tool_name: str, response) -> None:
         "ended_at": _now_iso(),
         "duration_ms": round((end_ts - started_ts) * 1000, 1),
         "result_size": len(msg),
-        "break_loop": bool(getattr(response, "break_loop", False)) if response is not None else False,
+        "break_loop": (
+            bool(getattr(response, "break_loop", False)) if response is not None else False
+        ),
     })
     r["tool_calls"].append(entry)
 
@@ -547,9 +549,11 @@ def _format_task_summary(snapshot: dict) -> str:
         bucket["cache_create"] += c.get("cache_creation_tokens", 0) or 0
         bucket["cost"] += c.get("cost_usd", 0.0) or 0.0
 
+    n_tools = totals.get("tool_calls", 0)
+    n_llm = totals.get("llm_calls", 0)
     lines = [
         f"✅ 태스크 완료 ({snapshot.get('task_id', '?')})",
-        f"⏱ {elapsed:.1f}s  🔧 tools {totals.get('tool_calls', 0)}  💬 LLM {totals.get('llm_calls', 0)}",
+        f"⏱ {elapsed:.1f}s  🔧 tools {n_tools}  💬 LLM {n_llm}",
         f"💰 ${cost_usd:.4f}",
     ]
     if by_model:
@@ -653,7 +657,7 @@ def finish_task(agent) -> dict | None:
         # Build a snapshot with computed totals/elapsed for the notification.
         summary_snapshot = dict(r)
         started_ts = summary_snapshot.get("started_ts")
-        if isinstance(started_ts, (int, float)):
+        if isinstance(started_ts, int | float):
             summary_snapshot["elapsed_sec"] = round(time.time() - started_ts, 3)
         summary_snapshot.pop("started_ts", None)
         summary_snapshot["totals"] = _compute_totals(summary_snapshot)

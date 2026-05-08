@@ -16,11 +16,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from flask import Response
-
 from agent import AgentContext
+from flask import Response
 from helpers.api import ApiHandler, Input, Output, Request
-
 
 # Make the plugin's `render/` package importable regardless of cwd.
 # Note: deliberately NOT named `helpers` — that would shadow agent-zero's
@@ -30,7 +28,6 @@ if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
 
 from render.render import render_chat_to_pdf  # noqa: E402
-
 
 # LogItem.type → our normalized role. Types we don't surface in the PDF
 # (progress/info/hint/etc.) map to None and get skipped.
