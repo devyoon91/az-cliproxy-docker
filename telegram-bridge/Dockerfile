@@ -13,5 +13,6 @@ COPY budget/ ./budget/
 COPY task_agg/ ./task_agg/
 COPY dashboard/ ./dashboard/
 COPY render/ ./render/
+COPY az_client/ ./az_client/
 
 CMD ["python", "bot.py"]

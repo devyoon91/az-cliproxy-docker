@@ -18,7 +18,7 @@ from collections import defaultdict
 import aiohttp
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from aiohttp import web, CookieJar
+from aiohttp import web
 
 # ── Timezone ──
 # 모든 /today /week /tasks 날짜 경계와 daily-usage reset 은 KST 로 정규화한다.
@@ -43,15 +43,13 @@ logger = logging.getLogger(__name__)
 # ── Config ──
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
-AZ_API_URL = os.environ.get("AZ_API_URL", "http://agent-zero:80")
-AZ_API_PREFIX = os.environ.get("AZ_API_PREFIX", "/api")  # v1.8+: /api prefix
+
+# AZ HTTP session + URL constants moved to `az_client/session.py`
+# (issue #79 Phase H). Re-exported below so existing call sites and
+# direct constant references keep working.
 
 # Agent Zero context ID (세션 유지)
 az_context = ""
-
-# 세션 유지 (CSRF 토큰 + 쿠키)
-az_session: aiohttp.ClientSession | None = None
-csrf_token: str = ""
 
 # 모니터링 상태
 monitor_enabled = True
@@ -70,8 +68,20 @@ monitor_verbose = False
 # Telegram Bot 인스턴스 (모니터에서 사용)
 tg_bot: Bot | None = None
 
-# 채팅 목록 캐시
-cached_contexts: list = []
+# AZ HTTP client surface — re-exported from az_client.session.
+# `cached_contexts` is the same list object, mutated in place by
+# `fetch_chat_list`, so direct reads in bot.py (cmd_chats, monitor)
+# stay live without extra plumbing.
+from az_client.session import (  # noqa: E402
+    AZ_API_PREFIX,
+    AZ_API_URL,
+    cached_contexts,
+    close_az_session,
+    fetch_chat_list,
+    get_az_session,
+    get_headers,
+    sync_log_version,
+)
 
 
 def _short_id(ctx_id: str | None, max_len: int = 12) -> str:
@@ -202,51 +212,6 @@ from pricing.usage import (
 )
 
 
-async def get_az_session() -> aiohttp.ClientSession:
-    """Agent Zero 세션 가져오기 (CSRF 토큰 포함)"""
-    global az_session, csrf_token
-
-    if az_session and not az_session.closed:
-        return az_session
-
-    jar = CookieJar(unsafe=True)
-    az_session = aiohttp.ClientSession(cookie_jar=jar)
-
-    try:
-        async with az_session.get(
-            f"{AZ_API_URL}{AZ_API_PREFIX}/csrf_token",
-            headers={"Origin": "http://localhost:50001"},
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                csrf_token = data.get("token", "")
-                logger.info(f"CSRF token acquired: {csrf_token[:10]}...")
-            else:
-                logger.warning(f"CSRF token request failed: {resp.status}")
-    except Exception as e:
-        logger.error(f"Failed to get CSRF token: {e}")
-
-    return az_session
-
-
-async def close_az_session():
-    """세션 닫기"""
-    global az_session
-    if az_session and not az_session.closed:
-        await az_session.close()
-        az_session = None
-
-
-def get_headers() -> dict:
-    headers = {
-        "Origin": "http://localhost:50001",  # v1.8 origin check bypass
-    }
-    if csrf_token:
-        headers["X-CSRF-Token"] = csrf_token
-    return headers
-
-
 # ── Telegram 메시지 전송 헬퍼 ──
 async def send_telegram(
     text: str,
@@ -303,69 +268,16 @@ async def send_telegram(
                 logger.error(f"[telegram] send failed: {e}")
 
 
-# ── 채팅 목록 조회 ──
-async def fetch_chat_list() -> list:
-    """Agent Zero의 활성 채팅(컨텍스트) 목록 조회"""
-    global cached_contexts
-    try:
-        session = await get_az_session()
-        headers = get_headers()
-
-        poll_payload = {
-            "log_from": 0,
-            "context": None,
-            "timezone": "Asia/Seoul",
-        }
-
-        async with session.post(
-            f"{AZ_API_URL}{AZ_API_PREFIX}/poll",
-            json=poll_payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            if resp.status != 200:
-                return []
-            poll_data = await resp.json()
-
-        contexts = poll_data.get("contexts", [])
-        cached_contexts = contexts
-        return contexts
-
-    except Exception as e:
-        logger.error(f"Failed to fetch chat list: {e}")
-        return []
-
-
-# ── 현재 시점 log_version 가져오기 (히스토리 스킵용) ──
-async def sync_log_version(ctx: str) -> int:
-    """특정 컨텍스트의 현재 log_version만 조용히 가져옴 (알림 없이 스킵)"""
-    try:
-        session = await get_az_session()
-        headers = get_headers()
-        poll_payload = {
-            "log_from": 999999999,  # 큰 수 → 로그 0건 반환, version만 획득
-            "context": ctx or None,
-            "timezone": "Asia/Seoul",
-        }
-        async with session.post(
-            f"{AZ_API_URL}{AZ_API_PREFIX}/poll",
-            json=poll_payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data.get("log_version", 0)
-    except Exception as e:
-        logger.error(f"sync_log_version error: {e}")
-    return 0
+# `fetch_chat_list` and `sync_log_version` moved to
+# `az_client/session.py` (issue #79 Phase H). Re-exported at the top
+# of this file alongside the session helpers.
 
 
 # ── Agent Zero 웹 채팅 모니터 ──
 async def monitor_agent_zero():
     """Agent Zero의 모든 대화를 백그라운드로 모니터링하여 Telegram에 전달"""
     global monitor_log_version, monitor_context, monitor_log_guid
-    global monitor_enabled, monitor_auto_follow, cached_contexts
+    global monitor_enabled, monitor_auto_follow
 
     logger.info("Agent Zero monitor started")
     await asyncio.sleep(10)
@@ -404,10 +316,12 @@ async def monitor_agent_zero():
                     continue
                 poll_data = await resp.json()
 
-            # 채팅 목록 캐시 업데이트
+            # 채팅 목록 캐시 업데이트 — clear+extend so the binding shared
+            # with cmd_chats and az_client.session stays the same list object.
             contexts = poll_data.get("contexts", [])
             if contexts:
-                cached_contexts = contexts
+                cached_contexts.clear()
+                cached_contexts.extend(contexts)
 
             # 컨텍스트 동기화
             new_context = poll_data.get("context", "")
@@ -529,7 +443,7 @@ def format_monitor_message(log_type: str, heading: str, content: str) -> str | N
 # ── Agent Zero API: Telegram에서 직접 메시지 전송 ──
 async def send_to_agent_zero(message: str) -> str:
     """Agent Zero /message_async API로 메시지 전송"""
-    global az_context, csrf_token, monitor_context, monitor_log_version
+    global az_context, monitor_context, monitor_log_version
 
     payload = {
         "text": message,
