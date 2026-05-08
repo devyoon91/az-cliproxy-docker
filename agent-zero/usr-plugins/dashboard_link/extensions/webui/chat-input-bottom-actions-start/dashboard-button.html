@@ -1,0 +1,32 @@
+<!-- Dashboard Link — bottom-actions button.
+     Opens the telegram-bridge cost dashboard (port 8443 by default) in a
+     new tab. Token + port come from the plugin's backend, which reads
+     DASHBOARD_TOKEN/DASHBOARD_PORT from agent-zero's env. The host part
+     is taken from window.location so SSH-tunneled setups work too. -->
+<html>
+<head>
+  <script type="module" src="/plugins/dashboard_link/webui/dashboard-link-store.js"></script>
+</head>
+<body>
+  <template x-if="$store.dashboardLink">
+    <button
+      type="button"
+      class="text-button dashboard-link-action"
+      title="비용 대시보드 열기 (새 탭)"
+      aria-label="Open cost dashboard"
+      data-bs-placement="top"
+      data-bs-trigger="hover"
+      :disabled="$store.dashboardLink.busy"
+      @click="$store.dashboardLink.open()"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+        <line x1="12" y1="20" x2="12" y2="10"></line>
+        <line x1="18" y1="20" x2="18" y2="4"></line>
+        <line x1="6" y1="20" x2="6" y2="14"></line>
+        <line x1="3" y1="20" x2="21" y2="20"></line>
+      </svg>
+      <p x-text="$store.dashboardLink.busy ? 'Dashboard…' : 'Dashboard'"></p>
+    </button>
+  </template>
+</body>
+</html>
