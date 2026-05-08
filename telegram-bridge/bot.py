@@ -379,7 +379,7 @@ def calc_cost(
     cache_creation_tokens: int = 0,
     reasoning_tokens: int = 0,
 ) -> float:
-    """Cache-aware cost calc.
+    r"""Cache-aware cost calc.
 
     `input_tokens` here is LiteLLM's normalized `prompt_tokens` — the
     TOTAL prompt token count INCLUDING the cache_read and cache_creation
@@ -873,7 +873,7 @@ async def send_to_agent_zero(message: str) -> str:
 
         return "✅ Agent Zero에 전달 완료. 응답은 자동으로 전송됩니다."
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return "Agent Zero 응답 시간 초과"
     except Exception as e:
         return f"Agent Zero 연결 실패: {str(e)}"
@@ -1224,7 +1224,7 @@ async def cmd_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = ["📚 문서 목록:\n"]
         for i, name in enumerate(doc_files.keys(), 1):
             lines.append(f"  {i}. {name}")
-        lines.append(f"\n문서 보기: /docs [번호]")
+        lines.append("\n문서 보기: /docs [번호]")
         lines.append("전체 다운로드: /docs all")
         await update.message.reply_text("\n".join(lines))
         return
@@ -1892,7 +1892,7 @@ async def take_pricing_snapshot(force: bool = False, alert: bool = True) -> dict
             else:
                 logger.info(f"[pricing] no changes vs {prev_date}")
         else:
-            logger.info(f"[pricing] first snapshot — no baseline for diff")
+            logger.info("[pricing] first snapshot — no baseline for diff")
 
     _rotate_pricing_snapshots()
     return payload

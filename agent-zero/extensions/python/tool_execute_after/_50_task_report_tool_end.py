@@ -5,7 +5,7 @@ See agent-zero/lib/task_report.py and issue #1.
 """
 
 from helpers.extension import Extension
-from helpers.task_report import tool_end, save_task
+from helpers.task_report import save_task, tool_end
 
 
 class TaskReportToolEnd(Extension):

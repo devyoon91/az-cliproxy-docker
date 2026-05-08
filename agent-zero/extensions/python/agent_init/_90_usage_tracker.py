@@ -20,10 +20,11 @@ but DO NOT POST to /track — let the probe be the single source of
 truth for /usage accumulation.
 """
 
-import litellm
-from litellm.integrations.custom_logger import CustomLogger
 import logging
+
+import litellm
 from helpers.extension import Extension
+from litellm.integrations.custom_logger import CustomLogger
 
 logger = logging.getLogger(__name__)
 

@@ -48,10 +48,9 @@ litellm.acompletion assignment alone doesn't reach the already-bound name).
 See issue #13 (M2).
 """
 
+import litellm
 from helpers.extension import Extension
 from helpers.task_report import last_stream_usage
-
-import litellm
 
 try:
     import requests  # used to fire-and-forget post to Telegram bridge

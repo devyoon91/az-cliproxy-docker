@@ -19,9 +19,7 @@ from __future__ import annotations
 import os
 
 from flask import jsonify
-
 from helpers.api import ApiHandler, Input, Output, Request
-
 
 # Default port for the bridge dashboard. Matches docker-compose.yml's
 # `ports: - "8443:8443"` mapping. Override via env if a custom mapping

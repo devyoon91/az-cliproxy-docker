@@ -32,7 +32,6 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markdown_it import MarkdownIt
 
-
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _HERE / "templates"
 
@@ -46,7 +45,9 @@ _ROLE_LABELS = {
 
 def _build_md() -> MarkdownIt:
     # commonmark + GFM-ish features that markdown-it-py supports natively.
-    return MarkdownIt("commonmark", {"html": False, "breaks": True}).enable(["table", "strikethrough"])
+    return MarkdownIt("commonmark", {"html": False, "breaks": True}).enable(
+        ["table", "strikethrough"]
+    )
 
 
 def _build_jinja() -> Environment:
@@ -63,7 +64,7 @@ def _format_message(m: dict[str, Any], md: MarkdownIt) -> dict[str, Any]:
 
     # tool_call: render the tool name + args as a fenced code block; ignore `text`.
     if role == "tool_call":
-        tool_name = m.get("tool_name", "tool")
+        # tool_name is folded into label downstream; the body is just the JSON args.
         args = m.get("tool_args_json") or m.get("text") or ""
         if isinstance(args, (dict, list)):
             args = json.dumps(args, ensure_ascii=False, indent=2)
