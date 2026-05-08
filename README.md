@@ -133,6 +133,7 @@ curl http://localhost:8317/v1/models   # API 동작 확인
 | **가격 추적** | `/pricing` LiteLLM 가격 일일 스냅샷 + drift 감지 (매일 00:30 KST) | [telegram-bot.md](docs/telegram-bot.md) |
 | **웹 대시보드** | Chart.js 차트 (일별/모델별/scatter), 자동 갱신, `DASHBOARD_TOKEN` 인증 | [README#web-dashboard](#web-dashboard-선택) |
 | **백업/복원** | 로컬 스크립트(full/config/light) + Telegram 원격 백업 | [backup.md](docs/backup.md) |
+| **채팅 PDF 추출** | 사이드바 드롭다운 버튼 한 번으로 활성 채팅을 PDF 로 다운로드 (한국어 폰트 포함) | [chat_pdf_export](agent-zero/usr-plugins/chat_pdf_export/README.md) |
 | **프롬프트 커스텀** | 코딩 규칙, 한국어, 작업 이력 관리 | [GUIDE.md](GUIDE.md#12-프롬프트-커스터마이징) |
 | **개인화 분리** | 하네스 킷과 개인 설정을 별도 저장소로 관리 ([az-agent-config-template](https://github.com/devyoon91/az-agent-config-template)) | [GUIDE.md](GUIDE.md#16-팁-개인화-저장소-분리) |
 

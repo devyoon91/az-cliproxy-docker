@@ -1,0 +1,64 @@
+<!-- Chat PDF Export — sidebar dropdown entry.
+     Calls the plugin's POST /plugins/chat_pdf_export/export_pdf endpoint
+     for the active chat, then triggers a browser download of the
+     returned PDF blob. CSRF is handled by `fetchApi`. -->
+<div x-data="{
+  busy: false,
+  async exportPdf() {
+    if (this.busy) return;
+    const ctxid = globalThis.getContext?.();
+    if (!ctxid) { alert('활성 채팅이 없습니다.'); return; }
+    this.busy = true;
+    try {
+      const { fetchApi } = await import('/js/api.js');
+      const res = await fetchApi('/plugins/chat_pdf_export/export_pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ context: ctxid }),
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || ('HTTP ' + res.status));
+      }
+      const blob = await res.blob();
+
+      // Filename: prefer RFC 5987 filename*=UTF-8'' over the ASCII fallback.
+      const disp = res.headers.get('Content-Disposition') || '';
+      let filename = 'chat-export.pdf';
+      const star = disp.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+      if (star) {
+        try { filename = decodeURIComponent(star[1]); } catch (_) {}
+      } else {
+        const plain = disp.match(/filename\s*=\s*\"?([^\";]+)\"?/i);
+        if (plain) filename = plain[1];
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke after the click event has had a chance to start the download.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (e) {
+      alert('PDF 추출 실패: ' + (e && e.message ? e.message : e));
+    } finally {
+      this.busy = false;
+    }
+  },
+}">
+  <button
+    x-move-after="#sidebar-files-dropdown"
+    class="dropdown-item"
+    id="chat-pdf-export-dropdown"
+    title="채팅을 PDF 로 추출"
+    :disabled="busy"
+    @click="exportPdf(); if (typeof $store !== 'undefined' && $store.sidebar?.menuClose) $store.sidebar.menuClose();"
+  >
+    <span class="material-symbols-outlined">picture_as_pdf</span>
+    <span x-text="busy ? 'PDF 생성 중...' : '채팅 PDF 추출'"></span>
+  </button>
+</div>

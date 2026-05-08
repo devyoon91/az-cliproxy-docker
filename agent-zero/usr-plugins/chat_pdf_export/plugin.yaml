@@ -1,0 +1,4 @@
+name: chat_pdf_export
+title: Chat PDF Export
+description: Export the active chat to a PDF file via a sidebar button. Renders user messages, agent responses, and tool calls with Korean font support (Noto Sans CJK KR).
+version: 0.1.0
