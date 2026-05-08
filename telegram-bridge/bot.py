@@ -310,24 +310,15 @@ async def _stream_extend(ctx_key: str, new_chunk: str) -> None:
 
 
 # ── 토큰 사용량 추적 ──
-usage_today: dict = {
-    "date": _kst_now().strftime("%Y-%m-%d"),
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "cache_read_tokens": 0,
-    "cache_creation_tokens": 0,
-    "reasoning_tokens": 0,
-    "requests": 0,
-    "cost_usd": 0.0,
-    "by_model": {},  # 모델별 집계
-}
-usage_history: list = []  # 최근 7일
-
-# Pricing primitives — moved to `pricing/cost.py` (issue #79 Phase A).
-# Re-exported here so existing references (track_usage, _resolve_litellm_key,
-# take_pricing_snapshot, _aggregate, …) keep working without prefix changes.
-# When all call sites in this file are eventually scoped under their own
-# carved-out modules, drop these re-exports.
+#
+# Pricing + per-day accumulation moved to `pricing/` (issue #79 Phase A
+# carved out cost; Phase B carved usage). Both modules use clear+update
+# instead of reassignment so importers can hold stable bindings — see
+# the docstrings there for the rationale.
+#
+# Names re-exported here so existing call sites (cmd_today, daily_usage_reporter,
+# /usage handler, _resolve_litellm_key, take_pricing_snapshot, _aggregate, …)
+# keep working without prefix changes during the multi-phase split.
 from pricing.cost import (
     _load_model_cost_map,
     _model_cost_map,
@@ -335,76 +326,11 @@ from pricing.cost import (
     _normalize_model,
     calc_cost,
 )
-
-
-def track_usage(
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    cache_read_tokens: int = 0,
-    cache_creation_tokens: int = 0,
-    reasoning_tokens: int = 0,
-):
-    """사용량 누적 (cache + reasoning tokens 포함).
-
-    `reasoning_tokens` (Claude 4.x 확장 사고, OpenAI o-series) 는 별도
-    필드로 추적해서 ``/usage`` 표시 시 분리 표시 가능하게 한다. cost 계산
-    은 ``calc_cost`` 가 자동으로 output rate 로 청구.
-    """
-    global usage_today
-    # Collapse provider-prefixed and bare forms so /today by_model stays unified.
-    model = _normalize_model(model)
-    today = _kst_now().strftime("%Y-%m-%d")
-
-    # 날짜가 바뀌면 리셋
-    if usage_today["date"] != today:
-        if usage_today["requests"] > 0:
-            usage_history.append(usage_today.copy())
-            while len(usage_history) > 7:
-                usage_history.pop(0)
-        usage_today = {
-            "date": today,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "reasoning_tokens": 0,
-            "requests": 0,
-            "cost_usd": 0.0,
-            "by_model": {},
-        }
-
-    cost = calc_cost(
-        model, input_tokens, output_tokens,
-        cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-    )
-
-    usage_today["input_tokens"] += input_tokens
-    usage_today["output_tokens"] += output_tokens
-    usage_today["cache_read_tokens"] = usage_today.get("cache_read_tokens", 0) + cache_read_tokens
-    usage_today["cache_creation_tokens"] = usage_today.get("cache_creation_tokens", 0) + cache_creation_tokens
-    usage_today["reasoning_tokens"] = usage_today.get("reasoning_tokens", 0) + reasoning_tokens
-    usage_today["requests"] += 1
-    usage_today["cost_usd"] += cost
-
-    if model not in usage_today["by_model"]:
-        usage_today["by_model"][model] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-            "reasoning_tokens": 0,
-            "requests": 0,
-            "cost_usd": 0.0,
-        }
-    m = usage_today["by_model"][model]
-    m["input_tokens"] += input_tokens
-    m["output_tokens"] += output_tokens
-    m["cache_read_tokens"] = m.get("cache_read_tokens", 0) + cache_read_tokens
-    m["cache_creation_tokens"] = m.get("cache_creation_tokens", 0) + cache_creation_tokens
-    m["reasoning_tokens"] = m.get("reasoning_tokens", 0) + reasoning_tokens
-    m["requests"] += 1
-    m["cost_usd"] += cost
+from pricing.usage import (
+    track_usage,
+    usage_history,
+    usage_today,
+)
 
 
 async def get_az_session() -> aiohttp.ClientSession:
