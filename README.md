@@ -88,6 +88,9 @@ services:
   환경/사용자에서 해당 디렉토리가 없으면 `:ro` mount source missing 으로 부팅 실패.
 - 개인화·테스트 마운트는 `docker-compose.override.yml` 에만, 항상 gitignored.
 - 테스트 종료 시 파일 삭제 후 `docker compose up -d --force-recreate <service>` 로 롤백.
+- 정책은 [`scripts/preflight.sh`](scripts/preflight.sh) 가 자동 enforce — CI 에서
+  PR 시점에 sibling mount 가 발견되면 fail. 로컬에서도 `./scripts/preflight.sh` 로
+  체크 가능.
 
 ## Quick Start
 
