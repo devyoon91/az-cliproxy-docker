@@ -18,8 +18,10 @@ chat_pdf_export/
 │       └── chat.html.j2                           # CSS + per-role styling, A4 page
 └── extensions/
     └── webui/
-        └── sidebar-quick-actions-dropdown-start/
-            └── export-pdf-entry.html              # Alpine button → fetchApi → blob download
+        ├── chat-input-bottom-actions-start/
+        │   └── export-pdf-button.html             # full-chat button (always visible)
+        └── set_messages_after_loop/
+            └── inject-pdf-buttons.js              # per-message action button injector
 ```
 
 ## Pipeline
@@ -52,23 +54,42 @@ POST /api/plugins/chat_pdf_export/export_pdf
 Content-Type: application/json
 X-CSRF-Token: <token>
 
-{ "context": "<active-chat-context-id>" }
+{
+  "context": "<active-chat-context-id>",
+  "log_no":  42                            // optional — single-message export
+}
 ```
 
-Returns: `200 application/pdf` with `Content-Disposition: attachment` and a
-download filename derived from the chat name. Errors:
+When `log_no` is omitted, the entire visible chat is rendered. When set, only
+the LogItem with that `.no` is rendered, and the title becomes
+`<chat name> — message #<log_no>`. Returns `200 application/pdf` with
+`Content-Disposition: attachment` and a download filename derived from the
+title. Errors:
 
 | Status | Meaning |
 |--------|---------|
-| 400    | Missing context id, or chat has no exportable messages |
-| 404    | Context not found |
+| 400    | Missing context id, `log_no` not an integer, or chat has no exportable messages |
+| 404    | Context not found, or `log_no` out of range / message has no exportable content |
 | 500    | WeasyPrint missing (rebuild image), or render error |
 
 ## UI
 
-Slot: `sidebar-quick-actions-dropdown-start` (same family as `_time_travel`,
-`_memory`). Click → `fetchApi` (auto-attaches CSRF) → blob → `<a download>`.
+**Full chat** — `chat-input-bottom-actions-start` slot. Always-visible row
+under the chat input (same row as Browser, Compact, Pause Agent, Nudge,
+Terminal, Stop). Mirrors `_browser/.../browser-button.html`.
+
+**Per-message** — `set_messages_after_loop` extension injects a
+`picture_as_pdf` action button into every message's `.step-action-buttons`
+bar. Same hook + helper (`createActionButton`) as
+`_chat_branching/inject-branch-buttons.js` — appears next to copy / branch
+on each message.
+
+Both flows use `fetchApi` (auto-attaches CSRF) → blob → `<a download>`.
 Korean filenames use RFC 5987 `filename*=UTF-8''...` and decode client-side.
+
+(An earlier revision used `sidebar-quick-actions-dropdown-start` for the
+full-chat button, which hid it inside a collapsed dropdown — moved out for
+discoverability.)
 
 ## What's filtered out
 

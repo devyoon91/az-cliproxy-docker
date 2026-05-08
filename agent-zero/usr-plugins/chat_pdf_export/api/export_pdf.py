@@ -96,7 +96,17 @@ def _ts_from_log_item(item: dict[str, Any]) -> str | None:
         return None
 
 
-def _build_chat_dict(context: AgentContext) -> dict[str, Any]:
+def _build_chat_dict(
+    context: AgentContext,
+    log_no: int | None = None,
+) -> dict[str, Any]:
+    """Build a normalized chat dict.
+
+    When `log_no` is None, every visible LogItem is included. When set,
+    only the LogItem with that `.no` is included — used for the
+    per-message export button. Title is augmented to make the source
+    obvious in the resulting PDF and download filename.
+    """
     name = (getattr(context, "name", None) or "Chat").strip() or "Chat"
     created_at_dt = getattr(context, "created_at", None)
     created_at = created_at_dt.isoformat(timespec="seconds") if created_at_dt else None
@@ -104,6 +114,8 @@ def _build_chat_dict(context: AgentContext) -> dict[str, Any]:
     # context.log.logs is the canonical list of LogItem objects. (Log.output()
     # returns a LogOutput wrapper for the UI, not a plain list — easy footgun.)
     log_items = list(getattr(context.log, "logs", []) or [])
+    if log_no is not None:
+        log_items = [it for it in log_items if getattr(it, "no", None) == log_no]
 
     messages: list[dict[str, Any]] = []
     for item in log_items:
@@ -112,8 +124,10 @@ def _build_chat_dict(context: AgentContext) -> dict[str, Any]:
         if m is not None:
             messages.append(m)
 
+    title = name if log_no is None else f"{name} — message #{log_no}"
+
     return {
-        "title": name,
+        "title": title,
         "created_at": created_at,
         "messages": messages,
     }
@@ -139,12 +153,27 @@ class ExportPdf(ApiHandler):
         if not ctxid:
             return Response("Missing context id", 400)
 
+        # Optional: when the per-message button is clicked, the frontend sends
+        # the LogItem.no for that message. We render only that one log entry.
+        raw_log_no = (input or {}).get("log_no")
+        log_no: int | None = None
+        if raw_log_no is not None and raw_log_no != "":
+            try:
+                log_no = int(raw_log_no)
+            except (TypeError, ValueError):
+                return Response("log_no must be an integer", 400)
+
         context = AgentContext.get(ctxid)
         if not context:
             return Response("Context not found", 404)
 
-        chat = _build_chat_dict(context)
+        chat = _build_chat_dict(context, log_no=log_no)
         if not chat["messages"]:
+            if log_no is not None:
+                return Response(
+                    f"Message #{log_no} not found or has no exportable content",
+                    404,
+                )
             return Response("Chat has no exportable messages", 400)
 
         try:
