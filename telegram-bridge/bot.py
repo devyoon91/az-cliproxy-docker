@@ -48,22 +48,15 @@ CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
 # (issue #79 Phase H). Re-exported below so existing call sites and
 # direct constant references keep working.
 
-# Agent Zero context ID (세션 유지)
-az_context = ""
-
-# 모니터링 상태
-monitor_enabled = True
-monitor_log_version = 0
-monitor_context = ""
-monitor_log_guid = ""
-monitor_auto_follow = True  # 웹에서 활성 채팅 변경 시 자동 추적
-# When False (the default), only `user` log types echo through to Telegram
-# during a task — AZ's intermediate activity (info/tool/code_exe/response/
-# error/warning) is suppressed. The user instead gets two clean messages
-# at task completion: AZ's answer + the metrics card (driven from
-# task_report.py). When True, every log type passes through unchanged for
-# debugging. Toggled via /verbose_on, /verbose_off.
-monitor_verbose = False
+# AZ session + monitor-loop globals (`az_context`, `monitor_enabled`,
+# `monitor_log_version`, `monitor_context`, `monitor_log_guid`,
+# `monitor_auto_follow`, `monitor_verbose`) moved to `monitor/state.py`
+# (issue #79 Phase P). Access them as attributes on the imported
+# module so reads + writes stay shared with every other module that
+# imports `monitor.state` (the cmd handlers we'll carve in subsequent
+# phases). `monitor.state.monitor_enabled = True` from any module
+# reaches the same slot as a read here.
+from monitor import state  # noqa: E402
 
 # Telegram Bot 인스턴스 (모니터에서 사용)
 tg_bot: Bot | None = None
@@ -217,18 +210,15 @@ from notify.telegram import send_telegram  # noqa: E402, F401
 # ── Agent Zero 웹 채팅 모니터 ──
 async def monitor_agent_zero():
     """Agent Zero의 모든 대화를 백그라운드로 모니터링하여 Telegram에 전달"""
-    global monitor_log_version, monitor_context, monitor_log_guid
-    global monitor_enabled, monitor_auto_follow
-
     logger.info("Agent Zero monitor started")
     await asyncio.sleep(10)
 
     # 최초 시작 시 현재 시점으로 스킵 (기존 히스토리 전송 방지)
-    monitor_log_version = await sync_log_version(monitor_context)
-    logger.info(f"Monitor synced to log_version: {monitor_log_version}")
+    state.monitor_log_version = await sync_log_version(state.monitor_context)
+    logger.info(f"Monitor synced to log_version: {state.monitor_log_version}")
 
     while True:
-        if not monitor_enabled:
+        if not state.monitor_enabled:
             await asyncio.sleep(5)
             continue
 
@@ -237,8 +227,8 @@ async def monitor_agent_zero():
             headers = get_headers()
 
             poll_payload = {
-                "log_from": monitor_log_version,
-                "context": monitor_context or None,
+                "log_from": state.monitor_log_version,
+                "context": state.monitor_context or None,
                 "timezone": "Asia/Seoul",
             }
 
@@ -270,25 +260,25 @@ async def monitor_agent_zero():
             new_log_version = poll_data.get("log_version", 0)
 
             # 자동 추적: 웹에서 다른 채팅으로 전환된 경우
-            if monitor_auto_follow and new_context and new_context != monitor_context:
-                old_ctx = _short_id(monitor_context)
+            if state.monitor_auto_follow and new_context and new_context != state.monitor_context:
+                old_ctx = _short_id(state.monitor_context)
                 new_ctx = _short_id(new_context)
                 # Drop the in-progress stream tied to the old chat — the
                 # 채팅 전환 알림 is itself a fresh standalone message and
                 # the new chat's logs should start their own stream.
-                _stream_reset(monitor_context or "_default")
+                _stream_reset(state.monitor_context or "_default")
                 await send_telegram(f"🔄 채팅 전환 감지: {old_ctx} → {new_ctx}")
-                monitor_context = new_context
-                monitor_log_guid = new_log_guid
+                state.monitor_context = new_context
+                state.monitor_log_guid = new_log_guid
                 # 현재 시점으로 스킵 (이전 히스토리 전송 방지)
-                monitor_log_version = await sync_log_version(new_context)
+                state.monitor_log_version = await sync_log_version(new_context)
                 await asyncio.sleep(2)
                 continue
 
             # 대화가 리셋된 경우
-            if new_log_guid and new_log_guid != monitor_log_guid:
-                monitor_log_guid = new_log_guid
-                monitor_log_version = new_log_version  # 현재 시점 유지
+            if new_log_guid and new_log_guid != state.monitor_log_guid:
+                state.monitor_log_guid = new_log_guid
+                state.monitor_log_version = new_log_version  # 현재 시점 유지
                 await asyncio.sleep(2)
                 continue
 
@@ -299,7 +289,7 @@ async def monitor_agent_zero():
                 # streaming_msg_id docstring above. We batch this poll's logs
                 # and either edit the active message or open a new one.
                 # A `user`-type log mid-batch marks a new turn boundary.
-                stream_key = monitor_context or "_default"
+                stream_key = state.monitor_context or "_default"
                 pending: list[str] = []
 
                 async def flush_pending():
@@ -323,13 +313,13 @@ async def monitor_agent_zero():
                         _stream_reset(stream_key)
 
                     formatted = format_monitor_message(
-                        log_type, heading, content, verbose=monitor_verbose,
+                        log_type, heading, content, verbose=state.monitor_verbose,
                     )
                     if formatted:
                         pending.append(formatted)
 
                 await flush_pending()
-                monitor_log_version = new_log_version
+                state.monitor_log_version = new_log_version
 
         except asyncio.CancelledError:
             break
@@ -344,11 +334,9 @@ async def monitor_agent_zero():
 # ── Agent Zero API: Telegram에서 직접 메시지 전송 ──
 async def send_to_agent_zero(message: str) -> str:
     """Agent Zero /message_async API로 메시지 전송"""
-    global az_context, monitor_context, monitor_log_version
-
     payload = {
         "text": message,
-        "context": az_context,
+        "context": state.az_context,
     }
     headers = get_headers()
 
@@ -381,11 +369,11 @@ async def send_to_agent_zero(message: str) -> str:
             else:
                 data = await resp.json()
 
-            az_context = data.get("context", az_context)
+            state.az_context = data.get("context", state.az_context)
             # 모니터도 같은 컨텍스트 추적하도록 동기화
-            if monitor_context != az_context:
-                monitor_context = az_context
-                monitor_log_version = await sync_log_version(az_context)
+            if state.monitor_context != state.az_context:
+                state.monitor_context = state.az_context
+                state.monitor_log_version = await sync_log_version(state.az_context)
 
         return "✅ Agent Zero에 전달 완료. 응답은 자동으로 전송됩니다."
 
@@ -450,14 +438,14 @@ async def check_agent_zero_status() -> str:
         except Exception as e:
             logger.debug(f"model_config_get failed: {e}")
 
-        ctx_short = _short_id(monitor_context)
+        ctx_short = _short_id(state.monitor_context)
         return (
             f"Agent Zero: 정상 동작 중\n\n"
             f"📋 프로필: {profile}\n"
             f"🤖 메인 모델: {chat_model}\n"
             f"⚡ 유틸 모델: {util_model}\n\n"
-            f"모니터링: {'켜짐' if monitor_enabled else '꺼짐'}\n"
-            f"자동 추적: {'켜짐' if monitor_auto_follow else '꺼짐'}\n"
+            f"모니터링: {'켜짐' if state.monitor_enabled else '꺼짐'}\n"
+            f"자동 추적: {'켜짐' if state.monitor_auto_follow else '꺼짐'}\n"
             f"현재 채팅: {ctx_short}"
         )
     except Exception as e:
@@ -498,10 +486,10 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, ctx in enumerate(contexts):
         ctx_id = ctx.get("id", "")
         name = ctx.get("name", "이름 없음")
-        is_current = "→ " if ctx_id == monitor_context else "  "
+        is_current = "→ " if ctx_id == state.monitor_context else "  "
         lines.append(f"{is_current}{i+1}. {name}\n   ID: {_short_id(ctx_id)}")
 
-    lines.append(f"\n현재 추적 중: {_short_id(monitor_context)}")
+    lines.append(f"\n현재 추적 중: {_short_id(state.monitor_context)}")
     lines.append("\n채팅 전환: /switch [번호]")
 
     await update.message.reply_text("\n".join(lines))
@@ -509,8 +497,6 @@ async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """채팅 전환"""
-    global az_context, monitor_context, monitor_log_version, monitor_log_guid
-
     if update.effective_chat.id != CHAT_ID:
         return
 
@@ -537,13 +523,13 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_name = target.get("name", "이름 없음")
 
     # Close any in-progress stream tied to the previous chat before swapping.
-    _stream_reset(monitor_context or "_default")
+    _stream_reset(state.monitor_context or "_default")
 
-    az_context = target_id
-    monitor_context = target_id
-    monitor_log_guid = ""
+    state.az_context = target_id
+    state.monitor_context = target_id
+    state.monitor_log_guid = ""
     # 현재 시점으로 스킵 (이전 히스토리 전송 방지)
-    monitor_log_version = await sync_log_version(target_id)
+    state.monitor_log_version = await sync_log_version(target_id)
 
     await update.message.reply_text(f"✅ 채팅 전환: {target_name}\nID: {_short_id(target_id)}")
 
@@ -562,7 +548,6 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     UI's "New Chat" button uses), gets the real ctxid back, then pins both
     az_context and monitor_context to it before replying.
     """
-    global az_context, monitor_context, monitor_log_version, monitor_log_guid
     if update.effective_chat.id != CHAT_ID:
         return
     msg = update.effective_message
@@ -577,7 +562,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # data per its chat_inherit_project setting (matches web UI behavior).
         async with session.post(
             f"{AZ_API_URL}{AZ_API_PREFIX}/chat_create",
-            json={"current_context": az_context or ""},
+            json={"current_context": state.az_context or ""},
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=15),
         ) as resp:
@@ -587,7 +572,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 headers = get_headers()
                 async with session.post(
                     f"{AZ_API_URL}{AZ_API_PREFIX}/chat_create",
-                    json={"current_context": az_context or ""},
+                    json={"current_context": state.az_context or ""},
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as retry:
@@ -604,14 +589,14 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Close any in-progress stream from the previous chat — new chat's logs
     # should open their own message, not extend the old one.
-    _stream_reset(monitor_context or "_default")
+    _stream_reset(state.monitor_context or "_default")
 
-    az_context = new_ctxid
-    monitor_context = new_ctxid
-    monitor_log_guid = ""
+    state.az_context = new_ctxid
+    state.monitor_context = new_ctxid
+    state.monitor_log_guid = ""
     # Skip past whatever log_version the new context starts at so we don't
     # re-stream the (empty) initial state. This mirrors /switch behavior.
-    monitor_log_version = await sync_log_version(new_ctxid)
+    state.monitor_log_version = await sync_log_version(new_ctxid)
 
     await msg.reply_text(
         f"✅ 새 대화 시작됨\nID: {_short_id(new_ctxid)}"
@@ -623,7 +608,7 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != CHAT_ID:
         return
 
-    if not monitor_context:
+    if not state.monitor_context:
         await update.message.reply_text("추적 중인 채팅이 없습니다. /chats 로 확인하세요.")
         return
 
@@ -636,7 +621,7 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # chat export API로 전체 대화 JSON 가져오기
         async with session.post(
             f"{AZ_API_URL}{AZ_API_PREFIX}/chat_export",
-            json={"ctxid": monitor_context},
+            json={"ctxid": state.monitor_context},
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=30),
         ) as resp:
@@ -652,12 +637,12 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # JSON 파일로 전송
         json_str = json.dumps(content, ensure_ascii=False, indent=2)
         json_file = io.BytesIO(json_str.encode("utf-8"))
-        json_file.name = f"chat_log_{monitor_context[:8]}.json"
+        json_file.name = f"chat_log_{state.monitor_context[:8]}.json"
 
         await tg_bot.send_document(
             chat_id=CHAT_ID,
             document=json_file,
-            caption=f"📋 채팅 로그 (Context: {_short_id(monitor_context)})",
+            caption=f"📋 채팅 로그 (Context: {_short_id(state.monitor_context)})",
         )
 
         # 텍스트 요약도 함께 생성
@@ -683,7 +668,7 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if txt_lines:
             txt_str = "\n\n".join(txt_lines)
             txt_file = io.BytesIO(txt_str.encode("utf-8"))
-            txt_file.name = f"chat_log_{monitor_context[:8]}.txt"
+            txt_file.name = f"chat_log_{state.monitor_context[:8]}.txt"
             await tg_bot.send_document(
                 chat_id=CHAT_ID,
                 document=txt_file,
@@ -767,7 +752,7 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             meta = {
                 "timestamp": datetime.now().isoformat(),
                 "type": "telegram-light-backup",
-                "monitor_context": monitor_context,
+                "monitor_context": state.monitor_context,
             }
             zf.writestr(
                 "backup_meta.json",
@@ -943,20 +928,18 @@ from telegram_handlers.cost import (  # noqa: E402, F401
 
 
 async def cmd_monitor_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global monitor_enabled, monitor_log_version
     if update.effective_chat.id != CHAT_ID:
         return
-    monitor_enabled = True
+    state.monitor_enabled = True
     # 현재 시점부터 모니터링 (이전 히스토리 전송 방지)
-    monitor_log_version = await sync_log_version(monitor_context)
+    state.monitor_log_version = await sync_log_version(state.monitor_context)
     await update.message.reply_text("✅ 웹 채팅 모니터링이 켜졌습니다. (현재 시점부터)")
 
 
 async def cmd_monitor_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global monitor_enabled
     if update.effective_chat.id != CHAT_ID:
         return
-    monitor_enabled = False
+    state.monitor_enabled = False
     await update.message.reply_text("🔇 웹 채팅 모니터링이 꺼졌습니다.")
 
 
@@ -971,10 +954,9 @@ async def cmd_track_chat_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     /follow_on is kept registered as an alias for muscle memory.
     """
-    global monitor_auto_follow
     if update.effective_chat.id != CHAT_ID:
         return
-    monitor_auto_follow = True
+    state.monitor_auto_follow = True
     await update.message.reply_text(
         "✅ 채팅 자동 추적 켜짐: 웹에서 채팅 전환 시 모니터가 따라갑니다."
     )
@@ -983,10 +965,9 @@ async def cmd_track_chat_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_track_chat_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Pin the monitor to its current chat regardless of AZ web's active chat.
     See cmd_track_chat_on for the rename rationale."""
-    global monitor_auto_follow
     if update.effective_chat.id != CHAT_ID:
         return
-    monitor_auto_follow = False
+    state.monitor_auto_follow = False
     await update.message.reply_text(
         "📌 채팅 자동 추적 꺼짐: 현재 채팅만 고정 추적합니다."
     )
@@ -996,10 +977,9 @@ async def cmd_verbose_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show every AZ log (info/tool/code_exe/response/error/warning) during
     a task — useful when debugging a stuck profile. Default-quiet behavior
     (only user echoes + task-completion summary) is the normal mode."""
-    global monitor_verbose
     if update.effective_chat.id != CHAT_ID:
         return
-    monitor_verbose = True
+    state.monitor_verbose = True
     await update.message.reply_text(
         "🔊 상세 모니터 켜짐: AZ 활동 로그(도구/코드/info 등) 모두 텔레그램으로 전송."
     )
@@ -1008,10 +988,9 @@ async def cmd_verbose_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_verbose_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Return to quiet mode — only user echoes during task, completion-time
     answer + metrics card from task_report."""
-    global monitor_verbose
     if update.effective_chat.id != CHAT_ID:
         return
-    monitor_verbose = False
+    state.monitor_verbose = False
     await update.message.reply_text(
         "🔇 상세 모니터 꺼짐: 진행 중엔 조용, 완료 시 답변+메트릭만."
     )

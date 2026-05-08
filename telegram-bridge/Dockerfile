@@ -17,5 +17,6 @@ COPY az_client/ ./az_client/
 COPY telegram_handlers/ ./telegram_handlers/
 COPY notify/ ./notify/
 COPY webhooks/ ./webhooks/
+COPY monitor/ ./monitor/
 
 CMD ["python", "bot.py"]
