@@ -159,7 +159,7 @@ def _write_report(report: dict, *, final: bool) -> None:
     try:
         snapshot = dict(report)
         started_ts = snapshot.get("started_ts")
-        if isinstance(started_ts, (int, float)):
+        if isinstance(started_ts, int | float):
             snapshot["elapsed_sec"] = round(time.time() - started_ts, 3)
         snapshot.pop("started_ts", None)
         snapshot["totals"] = _compute_totals(snapshot)
@@ -657,7 +657,7 @@ def finish_task(agent) -> dict | None:
         # Build a snapshot with computed totals/elapsed for the notification.
         summary_snapshot = dict(r)
         started_ts = summary_snapshot.get("started_ts")
-        if isinstance(started_ts, (int, float)):
+        if isinstance(started_ts, int | float):
             summary_snapshot["elapsed_sec"] = round(time.time() - started_ts, 3)
         summary_snapshot.pop("started_ts", None)
         summary_snapshot["totals"] = _compute_totals(summary_snapshot)

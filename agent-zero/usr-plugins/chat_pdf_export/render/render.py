@@ -66,7 +66,7 @@ def _format_message(m: dict[str, Any], md: MarkdownIt) -> dict[str, Any]:
     if role == "tool_call":
         # tool_name is folded into label downstream; the body is just the JSON args.
         args = m.get("tool_args_json") or m.get("text") or ""
-        if isinstance(args, (dict, list)):
+        if isinstance(args, dict | list):
             args = json.dumps(args, ensure_ascii=False, indent=2)
         body_md = f"```json\n{args}\n```"
     else:
