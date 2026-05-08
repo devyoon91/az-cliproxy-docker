@@ -8,5 +8,6 @@ RUN pip install --no-cache-dir \
     httpx
 
 COPY bot.py .
+COPY pricing/ ./pricing/
 
 CMD ["python", "bot.py"]
