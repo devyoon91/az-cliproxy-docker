@@ -130,8 +130,13 @@ def _stub_aiohttp() -> None:
         def get(self, *a, **k):
             raise NotImplementedError("aiohttp stub — fetch path not exercised in unit tests")
 
+    class _FakeCookieJar:
+        def __init__(self, *a, **k):
+            pass
+
     aiohttp.ClientTimeout = _FakeClientTimeout
     aiohttp.ClientSession = _FakeClientSession
+    aiohttp.CookieJar = _FakeCookieJar
 
 
 def _stub_pdf_render_deps() -> None:
