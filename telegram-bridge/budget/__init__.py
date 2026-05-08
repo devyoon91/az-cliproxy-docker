@@ -28,6 +28,13 @@ from .core import (
     alert_key,
     format_alert,
 )
+from .engine import (
+    _budget_check_window,
+    _compute_window_cost,
+    budget_check_all,
+    configure,
+    hourly_budget_sweep,
+)
 
 __all__ = [
     "BUDGET_DIR",
@@ -39,4 +46,9 @@ __all__ = [
     "_save_budget",
     "alert_key",
     "format_alert",
+    "_compute_window_cost",
+    "_budget_check_window",
+    "budget_check_all",
+    "hourly_budget_sweep",
+    "configure",
 ]
