@@ -1,0 +1,69 @@
+<!-- Chat PDF Export — bottom-actions button.
+     Mirrors the structure of _browser/chat-input-bottom-actions-start so the
+     button sits in the same always-visible row as Browser / Compact / Pause /
+     Nudge / Terminal / Stop. -->
+<button
+  type="button"
+  class="text-button chat-pdf-export-action"
+  title="채팅을 PDF 로 추출"
+  aria-label="Export chat as PDF"
+  data-bs-placement="top"
+  data-bs-trigger="hover"
+  x-data="{
+    busy: false,
+    async exportPdf() {
+      if (this.busy) return;
+      const ctxid = globalThis.getContext?.();
+      if (!ctxid) { alert('활성 채팅이 없습니다.'); return; }
+      this.busy = true;
+      try {
+        const { fetchApi } = await import('/js/api.js');
+        const res = await fetchApi('/plugins/chat_pdf_export/export_pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ context: ctxid }),
+        });
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(msg || ('HTTP ' + res.status));
+        }
+        const blob = await res.blob();
+
+        // Filename: prefer RFC 5987 filename*=UTF-8'' over the ASCII fallback.
+        const disp = res.headers.get('Content-Disposition') || '';
+        let filename = 'chat-export.pdf';
+        const star = disp.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+        if (star) {
+          try { filename = decodeURIComponent(star[1]); } catch (_) {}
+        } else {
+          const plain = disp.match(/filename\s*=\s*\"?([^\";]+)\"?/i);
+          if (plain) filename = plain[1];
+        }
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      } catch (e) {
+        alert('PDF 추출 실패: ' + (e && e.message ? e.message : e));
+      } finally {
+        this.busy = false;
+      }
+    },
+  }"
+  :disabled="busy"
+  @click="exportPdf()"
+>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+    <polyline points="14 2 14 8 20 8"></polyline>
+    <line x1="9" y1="13" x2="15" y2="13"></line>
+    <line x1="9" y1="17" x2="13" y2="17"></line>
+  </svg>
+  <p x-text="busy ? 'PDF…' : 'PDF'"></p>
+</button>
