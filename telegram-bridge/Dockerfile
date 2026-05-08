@@ -18,5 +18,6 @@ COPY telegram_handlers/ ./telegram_handlers/
 COPY notify/ ./notify/
 COPY webhooks/ ./webhooks/
 COPY monitor/ ./monitor/
+COPY streaming/ ./streaming/
 
 CMD ["python", "bot.py"]
