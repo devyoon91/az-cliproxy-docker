@@ -14,6 +14,11 @@ from .cost import (
     _normalize_model,
     calc_cost,
 )
+from .usage import (
+    track_usage,
+    usage_history,
+    usage_today,
+)
 
 __all__ = [
     "calc_cost",
@@ -21,4 +26,7 @@ __all__ = [
     "_normalize_model",
     "_load_model_cost_map",
     "_model_cost_map",
+    "track_usage",
+    "usage_today",
+    "usage_history",
 ]
