@@ -1202,74 +1202,22 @@ TASKS_DIR = "/app/tasks"
 
 # ── Budget alerts (M5-A · issue #19) ──
 # Persists across restarts via a docker volume mount (/app/data → ./telegram-bridge/data).
-BUDGET_DIR = "/app/data"
-BUDGET_PATH = os.path.join(BUDGET_DIR, "budget.json")
-
-# Threshold ladder. Order matters — _budget_check_window iterates highest first
-# so the strongest crossed level fires (and the lower ones are recorded as
-# already-fired so they don't follow-up next call).
-BUDGET_THRESHOLDS = [
-    (1.50, "🚨 심각", "150%"),
-    (1.00, "❌ 초과", "100%"),
-    (0.80, "⚠️ 주의", "80%"),
-]
-
-
-def _budget_default() -> dict:
-    """Empty budget shape. `alerts_fired` keys self-rotate by date —
-    yesterday's keys are simply never queried again."""
-    return {
-        "day_limit_usd": None,
-        "week_limit_usd": None,
-        "alerts_fired": {},  # "YYYY-MM-DD:day:80" -> True (presence = fired)
-    }
-
-
-_budget: dict = _budget_default()
-
-
-def _load_budget() -> None:
-    """Read budget.json once at startup. Missing file is fine — defaults stand.
-    Corrupt file logs once and resets to defaults so the bot keeps running."""
-    global _budget
-    try:
-        if os.path.isfile(BUDGET_PATH):
-            with open(BUDGET_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            # Merge into defaults to tolerate older/partial schemas.
-            base = _budget_default()
-            base.update({k: v for k, v in data.items() if k in base})
-            if not isinstance(base.get("alerts_fired"), dict):
-                base["alerts_fired"] = {}
-            _budget = base
-            logger.info(
-                f"[budget] loaded day=${_budget['day_limit_usd']} "
-                f"week=${_budget['week_limit_usd']}"
-            )
-        else:
-            logger.info("[budget] no saved budget — using defaults (no limits)")
-    except Exception as e:
-        logger.warning(f"[budget] load failed, using defaults: {e}")
-        _budget = _budget_default()
-
-
-def _save_budget() -> None:
-    """Best-effort write. Never propagate exceptions — a budget save failure
-    must not crash a /budget command or the hourly sweep."""
-    try:
-        os.makedirs(BUDGET_DIR, exist_ok=True)
-        tmp = BUDGET_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(_budget, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, BUDGET_PATH)
-    except Exception as e:
-        logger.warning(f"[budget] save failed: {e}")
-
-
-def _alert_key(window: str, threshold_pct: str, period_id: str) -> str:
-    """`period_id` is 'YYYY-MM-DD' for day, 'YYYY-Www' for week — naturally
-    self-rotating, so old entries never fire again."""
-    return f"{period_id}:{window}:{threshold_pct}"
+# Budget state, persistence, threshold ladder, pure formatters — moved
+# to `budget/core.py` (issue #79 Phase C). Re-exported below so the
+# async engine (_budget_check_window, hourly_budget_sweep) and the
+# /budget command handler keep the existing names. A future phase can
+# rename callers to use the public surface (alert_key, format_alert).
+from budget.core import (
+    BUDGET_DIR,
+    BUDGET_PATH,
+    BUDGET_THRESHOLDS,
+    _budget,
+    _budget_default,
+    _load_budget,
+    _save_budget,
+)
+from budget.core import alert_key as _alert_key  # noqa: F401  # legacy name
+from budget.core import format_alert as _format_budget_alert  # noqa: F401
 
 
 def _compute_window_cost(window: str) -> dict:
@@ -1320,27 +1268,6 @@ def _compute_window_cost(window: str) -> dict:
         "period_id": period_id,
         "label": label,
     }
-
-
-def _format_budget_alert(window: str, info: dict, limit: float, level_label: str, ratio: float) -> str:
-    """Render the threshold-crossed alert. Spec from issue #19."""
-    cost = info["cost_usd"]
-    remaining = limit - cost
-    pct = ratio * 100
-    period_word = "일간" if window == "day" else "주간"
-    lines = [
-        f"{level_label} {period_word} 예산 {pct:.0f}% 도달",
-        f"{info['label']}",
-        f"비용: ${cost:.4f} / ${limit:.2f} 한도",
-    ]
-    if remaining >= 0:
-        lines.append(f"남은 예산: ${remaining:.4f}")
-    else:
-        lines.append(f"초과: ${abs(remaining):.4f}")
-    if info.get("top_model"):
-        m, mc = info["top_model"]
-        lines.append(f"주요 소비 모델: {m} (${mc:.4f})")
-    return "\n".join(lines)
 
 
 async def _budget_check_window(window: str) -> bool:
