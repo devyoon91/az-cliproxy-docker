@@ -104,6 +104,36 @@ def _stub_flask() -> None:
     flask.jsonify = lambda *a, **k: ("jsonified", a, k)
 
 
+def _stub_aiohttp() -> None:
+    """`pricing.snapshot._fetch_litellm_table` imports aiohttp for the
+    LiteLLM HTTP fetch. Pure-helper tests don't exercise that path, but
+    the module-level import still has to succeed when aiohttp isn't on
+    the test host's pip list."""
+    if "aiohttp" in sys.modules:
+        return
+    aiohttp = _ensure_module("aiohttp")
+
+    class _FakeClientTimeout:
+        def __init__(self, *a, **k):
+            pass
+
+    class _FakeClientSession:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        def get(self, *a, **k):
+            raise NotImplementedError("aiohttp stub — fetch path not exercised in unit tests")
+
+    aiohttp.ClientTimeout = _FakeClientTimeout
+    aiohttp.ClientSession = _FakeClientSession
+
+
 def _stub_pdf_render_deps() -> None:
     """`chat_pdf_export.render.render` imports jinja2 + markdown_it +
     weasyprint at module top. Tests for `_build_chat_dict` don't render
@@ -157,3 +187,4 @@ def install_all() -> None:
     _stub_litellm()
     _stub_flask()
     _stub_pdf_render_deps()
+    _stub_aiohttp()
