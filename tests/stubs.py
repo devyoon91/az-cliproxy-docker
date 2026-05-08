@@ -138,6 +138,64 @@ def _stub_aiohttp() -> None:
     aiohttp.ClientSession = _FakeClientSession
     aiohttp.CookieJar = _FakeCookieJar
 
+    # `aiohttp.web` — webhook handlers + dashboard handlers use it. We
+    # don't actually start a server in tests; we just need the module
+    # surface to satisfy imports + return inspectable Response/json_response
+    # objects so handler tests can read body bytes.
+    web = _ensure_module("aiohttp.web")
+
+    class _FakeResponse:
+        def __init__(self, *, status=200, body=b"", text=None,
+                     content_type=None, charset=None, headers=None):
+            self.status = status
+            self.body = body if isinstance(body, bytes | bytearray) else (
+                (text or "").encode("utf-8")
+            )
+            self.text = text or ""
+            self.content_type = content_type
+            self.charset = charset
+            self.headers = headers or {}
+
+    def _json_response(data=None, *, status=200, headers=None):
+        import json as _json
+        body = _json.dumps(data).encode("utf-8")
+        return _FakeResponse(status=status, body=body, headers=headers)
+
+    class _FakeApp:
+        def __init__(self):
+            self.router = _FakeRouter()
+
+    class _FakeRouter:
+        def __init__(self):
+            self.routes = []
+
+        def add_post(self, path, handler):
+            self.routes.append(("POST", path, handler))
+
+        def add_get(self, path, handler):
+            self.routes.append(("GET", path, handler))
+
+    class _FakeAppRunner:
+        def __init__(self, *a, **k):
+            pass
+
+        async def setup(self):
+            pass
+
+    class _FakeTCPSite:
+        def __init__(self, *a, **k):
+            pass
+
+        async def start(self):
+            pass
+
+    web.Response = _FakeResponse
+    web.json_response = _json_response
+    web.Application = _FakeApp
+    web.AppRunner = _FakeAppRunner
+    web.TCPSite = _FakeTCPSite
+    aiohttp.web = web
+
 
 def _stub_pdf_render_deps() -> None:
     """`chat_pdf_export.render.render` imports jinja2 + markdown_it +
