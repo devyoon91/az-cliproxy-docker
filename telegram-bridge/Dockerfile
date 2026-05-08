@@ -10,5 +10,6 @@ RUN pip install --no-cache-dir \
 COPY bot.py .
 COPY pricing/ ./pricing/
 COPY budget/ ./budget/
+COPY task_agg/ ./task_agg/
 
 CMD ["python", "bot.py"]
