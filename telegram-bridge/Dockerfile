@@ -12,5 +12,6 @@ COPY pricing/ ./pricing/
 COPY budget/ ./budget/
 COPY task_agg/ ./task_agg/
 COPY dashboard/ ./dashboard/
+COPY render/ ./render/
 
 CMD ["python", "bot.py"]
