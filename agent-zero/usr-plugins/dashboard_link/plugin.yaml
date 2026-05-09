@@ -2,3 +2,11 @@ name: dashboard_link
 title: Dashboard Link
 description: Sidebar action button that opens the telegram-bridge cost dashboard in a new tab. Reads DASHBOARD_TOKEN from agent-zero's env and constructs the URL using the current browser hostname (so SSH-tunneled and direct setups both work).
 version: 0.1.0
+author: devyoon91
+license: MIT
+repo: https://github.com/devyoon91/az-cliproxy-docker
+homepage: https://github.com/devyoon91/az-cliproxy-docker/tree/main/agent-zero/usr-plugins/dashboard_link
+tags:
+  - dashboard
+  - telegram
+  - cost

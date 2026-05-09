@@ -5,6 +5,10 @@ Reads the live `AgentContext` log (same source the WebUI renders), maps each
 `LogItem` to a normalized message dict, then renders via markdown-it-py +
 Jinja2 + WeasyPrint with embedded Korean font (Noto Sans CJK KR).
 
+> 새 플러그인 작성 가이드: [`docs/plugins.md`](../../../docs/plugins.md)
+> (Alpine store 패턴, 슬롯 가이드, 흔한 실수). 이 플러그인이 그 가이드의 두
+> 레퍼런스 중 하나다.
+
 ## Layout
 
 ```

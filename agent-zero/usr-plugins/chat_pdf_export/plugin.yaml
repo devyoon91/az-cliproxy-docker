@@ -1,4 +1,12 @@
 name: chat_pdf_export
 title: Chat PDF Export
 description: Export the active chat to a PDF file via a sidebar button. Renders user messages, agent responses, and tool calls with Korean font support (Noto Sans CJK KR).
-version: 0.1.0
+version: 0.2.1
+author: devyoon91
+license: MIT
+repo: https://github.com/devyoon91/az-cliproxy-docker
+homepage: https://github.com/devyoon91/az-cliproxy-docker/tree/main/agent-zero/usr-plugins/chat_pdf_export
+tags:
+  - export
+  - pdf
+  - korean

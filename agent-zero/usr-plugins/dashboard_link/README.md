@@ -2,6 +2,10 @@
 
 One-click open of the telegram-bridge cost dashboard from agent-zero.
 
+> 새 플러그인 작성 가이드: [`docs/plugins.md`](../../../docs/plugins.md)
+> (Alpine store 패턴, 슬롯 가이드, 흔한 실수). 이 플러그인이 그 가이드의 두
+> 레퍼런스 중 하나다.
+
 ## Why this exists
 
 The bridge serves the dashboard at `http://localhost:8443/dashboard?token=<token>`,

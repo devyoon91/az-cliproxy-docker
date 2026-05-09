@@ -212,6 +212,7 @@ scatter (프로파일별 색상), 윈도우 합계.
 | [docs/usage.md](docs/usage.md) | Agent Zero 사용 가이드 (한글) |
 | [docs/architecture.md](docs/architecture.md) | Agent Zero 아키텍처 (한글) |
 | [docs/extensibility.md](docs/extensibility.md) | Agent Zero 확장 가이드 (한글) |
+| [docs/plugins.md](docs/plugins.md) | usr-plugins 작성 가이드 (Alpine store, 슬롯, 흔한 실수) |
 
 ## Preview
 
