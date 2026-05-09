@@ -17,8 +17,10 @@ from notify.telegram import send_document
 from telegram import Update
 from telegram.ext import ContextTypes
 
-# Read CHAT_ID directly from env — same source bot.py uses.
-CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
+# Read CHAT_ID directly from env — same source bot.py uses. Optional
+# (issue #106): handlers are only registered when telegram is enabled.
+_chat_id_raw = os.environ.get("TELEGRAM_CHAT_ID")
+CHAT_ID: int | None = int(_chat_id_raw) if _chat_id_raw else None
 
 
 async def cmd_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):

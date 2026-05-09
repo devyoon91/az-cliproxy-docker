@@ -43,10 +43,10 @@ from telegram.ext import ContextTypes
 logger = logging.getLogger(__name__)
 
 # Same env source bot.py uses — keeps the carve identical to the rest of
-# telegram_handlers/. Re-reading rather than threading CHAT_ID through is
-# fine because the env is set once at container start and these handlers
-# only fire under the running event loop.
-CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
+# telegram_handlers/. Optional (issue #106): when telegram is disabled,
+# bot.py never registers these handlers, so CHAT_ID stays None safely.
+_chat_id_raw = os.environ.get("TELEGRAM_CHAT_ID")
+CHAT_ID: int | None = int(_chat_id_raw) if _chat_id_raw else None
 
 
 async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):

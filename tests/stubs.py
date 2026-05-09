@@ -244,6 +244,75 @@ def _stub_pdf_render_deps() -> None:
     weasy.CSS = lambda *a, **k: None
 
 
+def _stub_telegram() -> None:
+    """`from telegram import Update, Bot` and `from telegram.ext import …`.
+
+    bot.py and the telegram_handlers/* modules import these at module top.
+    Tests that load those modules (e.g. test_bridge_optional_telegram)
+    only need the names to resolve — no behavior. Skip if the real
+    library is on the host (won't happen in CI's slim env)."""
+    if "telegram" in sys.modules:
+        return
+    telegram = _ensure_module("telegram")
+
+    class _FakeUpdate:
+        ALL_TYPES = "ALL_TYPES"
+
+    class _FakeBot:
+        def __init__(self, *a, **k):
+            pass
+
+    telegram.Update = _FakeUpdate
+    telegram.Bot = _FakeBot
+
+    ext = _ensure_module("telegram.ext")
+
+    class _FakeApplication:
+        @classmethod
+        def builder(cls):
+            return _FakeBuilder()
+
+        def add_handler(self, *a, **k):
+            pass
+
+        def run_polling(self, *a, **k):
+            pass
+
+    class _FakeBuilder:
+        def token(self, *a, **k):
+            return self
+
+        def post_init(self, *a, **k):
+            return self
+
+        def build(self):
+            return _FakeApplication()
+
+    class _FakeHandler:
+        def __init__(self, *a, **k):
+            pass
+
+    class _FakeFilters:
+        TEXT = object()
+        COMMAND = object()
+
+        def __invert__(self):
+            return self
+
+        def __and__(self, other):
+            return self
+
+    class _FakeContextTypes:
+        DEFAULT_TYPE = object
+
+    ext.Application = _FakeApplication
+    ext.CommandHandler = _FakeHandler
+    ext.MessageHandler = _FakeHandler
+    ext.filters = _FakeFilters()
+    ext.ContextTypes = _FakeContextTypes
+    telegram.ext = ext  # type: ignore[attr-defined]
+
+
 def install_all() -> None:
     _stub_helpers()
     _stub_agent()
@@ -251,3 +320,4 @@ def install_all() -> None:
     _stub_flask()
     _stub_pdf_render_deps()
     _stub_aiohttp()
+    _stub_telegram()
