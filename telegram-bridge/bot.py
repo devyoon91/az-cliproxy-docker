@@ -41,8 +41,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Config ──
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
+# Telegram credentials are optional (issue #106). When either is missing,
+# bot polling is skipped and only the aiohttp webhook/dashboard server runs.
+# Empty strings (e.g. `TELEGRAM_BOT_TOKEN=` in .env) are treated as unset.
+BOT_TOKEN: str | None = os.environ.get("TELEGRAM_BOT_TOKEN") or None
+_chat_id_raw = os.environ.get("TELEGRAM_CHAT_ID")
+CHAT_ID: int | None = int(_chat_id_raw) if _chat_id_raw else None
+TELEGRAM_ENABLED: bool = bool(BOT_TOKEN and CHAT_ID is not None)
 
 # AZ HTTP session + URL constants moved to `az_client/session.py`
 # (issue #79 Phase H). Re-exported below so existing call sites and
@@ -857,7 +862,24 @@ def main():
     # but skip the actual alert send. Done here so it's set before the
     # webhook server accepts its first /track.
     import budget.engine
+    # send_telegram is a no-op when notify.telegram isn't configure()d
+    # (notify/telegram.py:54), so wiring it unconditionally is safe even
+    # when the bot polling branch is skipped below.
     budget.engine.configure(send_alert=send_telegram)
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(run_webhook_server())
+
+    # Issue #106: Telegram polling is optional. When credentials are missing,
+    # keep the aiohttp webhook/dashboard server alive but skip the bot
+    # Application entirely (which would crash on a None token).
+    if not TELEGRAM_ENABLED:
+        logger.warning(
+            "TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID 미설정 — Telegram polling 비활성화. "
+            "Webhook/Dashboard 만 기동합니다."
+        )
+        loop.run_forever()
+        return
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
@@ -890,9 +912,6 @@ def main():
     app.add_handler(CommandHandler("follow_off", cmd_track_chat_off))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(run_webhook_server())
 
     logger.info("Telegram Bridge Bot started (with monitor + multi-chat)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

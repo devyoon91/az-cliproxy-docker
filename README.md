@@ -176,7 +176,7 @@ curl http://localhost:8317/v1/models   # API 동작 확인
 | CLIProxy | 8317 | OpenAI-compatible API |
 | CLIProxy | 8085 | Management UI |
 | CLIProxy | 54545 | OAuth callback |
-| Telegram Bridge | 8443 | 알림/추적 Webhook · /dashboard (선택) |
+| Telegram Bridge | 8443 | 알림/추적 Webhook · /dashboard (선택, 텔레그램 토큰 없이도 단독 사용 가능 — issue #106) |
 
 ### Web Dashboard (선택)
 
