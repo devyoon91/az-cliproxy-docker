@@ -1,822 +1,539 @@
 # Agent Zero + CLIProxy 구축 가이드
 
-> Agent Zero v1.13 | CLIProxy v6.9+
+> Agent Zero v1.13 | CLIProxy v6.9.18 | Telegram Bridge (custom)
 
-이 문서는 Agent Zero를 CLIProxy와 연동하여 Docker 환경에서 구동하는 전체 과정을 단계별로 정리한 가이드입니다.
+이 문서는 [README.md](README.md) 를 읽었다는 가정 하에, 신규 사용자가 부팅까지
+실수 없이 도달하기 위한 **walkthrough** 입니다. README 가 "이 저장소가 무엇을
+하는가" 를 답한다면, GUIDE 는 "정확히 무엇을 입력하고, 무엇을 확인해야 하는가"
+를 답합니다.
+
+**중요한 차이점**: 임베디드 `docker-compose.yml` 예제는 두지 않습니다 —
+저장소의 실제 [`docker-compose.yml`](docker-compose.yml) 이 권위 있는 source
+이고, 임베디드 예제는 시간이 지나며 drift 가 누적되기 때문입니다. 환경변수도
+마찬가지로 [`.env.example`](.env.example) 이 권위 있는 source 이고, GUIDE 는
+"어떤 항목을 채워야 하는가" 만 안내합니다.
 
 ---
 
 ## 목차
 
-1. [개요](#1-개요)
+1. [LLM 트랙 결정](#1-llm-트랙-결정)
 2. [사전 준비](#2-사전-준비)
-3. [프로젝트 구조 생성](#3-프로젝트-구조-생성)
-4. [Docker Compose 구성](#4-docker-compose-구성)
-5. [CLIProxy 설정](#5-cliproxy-설정)
-6. [Agent Zero 환경변수 설정](#6-agent-zero-환경변수-설정)
-7. [컨테이너 실행](#7-컨테이너-실행)
-8. [Claude OAuth 로그인](#8-claude-oauth-로그인)
-9. [API 동작 확인](#9-api-동작-확인)
-10. [Agent Zero UI 모델 설정](#10-agent-zero-ui-모델-설정)
-11. [Git + GitHub CLI 자동화](#11-git--github-cli-자동화)
-12. [프롬프트 커스터마이징](#12-프롬프트-커스터마이징)
-13. [설정 영속화](#13-설정-영속화)
-14. [Telegram Bot 원격 제어](#14-telegram-bot-원격-제어)
-15. [팁: 호스트 파일시스템 접근](#15-팁-호스트-파일시스템-접근)
-16. [팁: 개인화 저장소 분리](#16-팁-개인화-저장소-분리)
-17. [트러블슈팅](#17-트러블슈팅)
+3. [저장소 clone + 환경 설정](#3-저장소-clone--환경-설정)
+4. [컨테이너 부팅](#4-컨테이너-부팅)
+5. [Track B 만: CLIProxy OAuth 로그인](#5-track-b-만-cliproxy-oauth-로그인)
+6. [API 동작 확인](#6-api-동작-확인)
+7. [Agent Zero UI 모델 설정](#7-agent-zero-ui-모델-설정)
+8. [Telegram Bot 연동](#8-telegram-bot-연동)
+9. [(선택) Web Dashboard 활성화](#9-선택-web-dashboard-활성화)
+10. [(선택) 개인화 저장소 분리](#10-선택-개인화-저장소-분리)
+11. [핵심 기능 cross-link](#11-핵심-기능-cross-link)
+12. [트러블슈팅](#12-트러블슈팅)
 
 ---
 
-## 1. 개요
+## 1. LLM 트랙 결정
 
-### 구성 요소
+이 환경은 LLM 연결을 두 트랙으로 지원합니다. 부팅 전에 어느 쪽을 쓸지 먼저
+정해야 `.env` 와 `settings.json` 의 값이 결정됩니다.
 
-- **Agent Zero** (`agent0ai/agent-zero`): 자율 AI 에이전트 프레임워크. LiteLLM을 통해 다양한 LLM 프로바이더를 지원하며, OpenAI 호환 API 엔드포인트에 연결할 수 있습니다.
-- **CLIProxy** (`eceasy/cli-proxy-api`): 다양한 AI CLI 도구의 OAuth 인증을 활용하여 OpenAI 호환 REST API로 노출하는 프록시.
+| | Track A — Direct API ★ 권장 | Track B — CLIProxy |
+|---|---|---|
+| **인증** | API 키 (Anthropic / OpenAI 등) | 공식 CLI OAuth 토큰 |
+| **셋업 단계** | 키 1개 입력 → 끝 | CLIProxy 컨테이너 + CLI 로그인 단계 |
+| **비용 모델** | 종량제 (요청당) | 구독 한도 내 사용 (Pro / Max 등) |
+| **안정성** | 표준 경로, 정책 영향 없음 | 벤더가 우회 경로를 점진적으로 제한하는 추세 (2026 기준) |
+| **추천 용도** | 운영, 비용 가시성 우선, 외부 배포 | 개인 개발/실험, 구독 한도 활용 |
 
-### 동작 흐름
+두 트랙은 상호 배타적이지 않습니다. `settings.json` 에서 chat-model 과
+util-model 을 각각 다른 base URL 에 연결하면 모델별로 트랙을 섞을 수 있습니다
+(예: chat 은 Track B 한도 활용, util 은 Track A 안정성 확보).
 
-```
-사용자 → Agent Zero UI (50001)
-           → LiteLLM (OpenAI 호환 요청)
-              → CLIProxy (8317, OpenAI API 포맷)
-                 → LLM CLI (OAuth)
-                    → LLM Provider
-```
+> **이 문서의 흐름**: §3 까지는 두 트랙 공통, §5 만 Track B 전용입니다. Track A
+> 만 쓴다면 §5 를 건너뛰고 §6 으로 가세요.
 
 ---
 
 ## 2. 사전 준비
 
-- Docker Desktop 설치 및 실행
-- Claude Pro 또는 Max 구독 계정
-- 브라우저 (OAuth 인증용)
-- GitHub Personal Access Token (PAT) — Git push 자동화 시 필요
-
----
-
-## 3. 프로젝트 구조 생성
-
-```bash
-mkdir -p agent-zero_cliproxy/cliproxy/auth
-mkdir -p agent-zero_cliproxy/cliproxy/logs
-mkdir -p agent-zero_cliproxy/agent-zero/work_dir
-mkdir -p agent-zero_cliproxy/agent-zero/memory
-mkdir -p agent-zero_cliproxy/agent-zero/logs
-```
-
-최종 디렉토리 구조:
-
-```
-agent-zero_cliproxy/
-├── docker-compose.yml
-├── .env                  # 실제 토큰 포함 (git에서 제외됨)
-├── .env.example          # 토큰 없는 템플릿 (git에 포함)
-├── cliproxy/
-│   ├── config.yaml
-│   ├── auth/
-│   └── logs/
-└── agent-zero/
-    ├── git-init.sh       # 컨테이너 시작 시 Git 인증 자동 설정
-    ├── prompts/          # (Step 12에서 추가)
-    ├── work_dir/         # Agent Zero 작업 디렉토리 (clone, 코드 생성 등)
-    ├── memory/
-    └── logs/
-```
-
----
-
-## 4. Docker Compose 구성
-
-`docker-compose.yml` 파일 생성:
-
-```yaml
-version: "3.8"
-
-services:
-  # ── CLIProxy: Claude Code CLI → OpenAI-compatible API ──
-  cliproxy:
-    image: eceasy/cli-proxy-api:v6.9.18
-    container_name: cliproxy
-    ports:
-      - "8317:8317"   # OpenAI-compatible API
-      - "8085:8085"   # Web Management UI
-      - "54545:54545" # OAuth callback
-    volumes:
-      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml
-      - ./cliproxy/auth:/root/.cli-proxy-api
-      - ./cliproxy/logs:/CLIProxyAPI/logs
-    restart: unless-stopped
-    networks:
-      - az-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8317/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
-  # ── Agent Zero: AI Agent Framework ──
-  agent-zero:
-    image: agent0ai/agent-zero:v1.13
-    container_name: agent-zero
-    ports:
-      - "50001:80"
-    env_file:
-      - .env
-    environment:
-      - GIT_USER_NAME=${GIT_USER_NAME}
-      - GIT_USER_EMAIL=${GIT_USER_EMAIL}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-    volumes:
-      - ./agent-zero/work_dir:/a0/work_dir
-      - ./agent-zero/memory:/a0/memory
-      - ./agent-zero/logs:/a0/logs
-      - ./agent-zero/prompts:/a0/prompts
-      - ./agent-zero/git-init.sh:/a0/git-init.sh:ro
-    entrypoint: ["/bin/sh", "-c", "sh /a0/git-init.sh && exec /exe/initialize.sh"]
-    depends_on:
-      cliproxy:
-        condition: service_started
-    restart: unless-stopped
-    networks:
-      - az-net
-
-networks:
-  az-net:
-    driver: bridge
-```
-
-### 핵심 포인트
-
-- 두 컨테이너는 `az-net` 브릿지 네트워크로 연결
-- Agent Zero에서 CLIProxy 접근 시 `http://cliproxy:8317/v1` 사용 (Docker 내부 DNS)
-- `localhost`가 아닌 **컨테이너 이름**을 사용해야 함
-
----
-
-## 5. CLIProxy 설정
-
-`cliproxy/config.yaml` 파일 생성:
-
-```yaml
-# CLIProxy Configuration
-host: "0.0.0.0"
-port: 8317
-
-# 핵심: auth 디렉토리 명시 (이 값이 없으면 mkdir 오류 발생)
-auth-dir: "/root/.cli-proxy-api"
-
-# Logging
-debug: false
-logging-to-file: false
-
-# Request retry
-request-retry: 3
-
-# Management API
-remote-management:
-  allow-remote: false
-  secret-key: ""
-
-# Provider 설정 (OAuth 로그인 후 자동 저장됨)
-auth: {}
-```
-
-> **주의**: `auth-dir` 필드를 반드시 명시해야 합니다. 누락 시 `failed to create auth directory: mkdir: no such file or directory` 오류가 발생합니다.
-
-> **보안 주의 — Management UI 비밀번호**: `cliproxy/config.example.yaml`의 `secret-key: "your-management-password"`는 **placeholder**입니다. CLIProxy Management UI(http://localhost:8085)를 사용할 계획이라면 **실제 강력한 비밀번호로 반드시 교체**하세요. 최초 접속 시 자동으로 해시 변환됩니다.
->
-> Anthropic API 모드(`chat_model_provider: "anthropic"`)로만 운영하는 경우 CLIProxy는 단순 의존성으로만 기동되고 Management UI를 쓰지 않으므로 즉시 위험은 없지만, `8085` 포트가 호스트로 노출(`docker-compose.yml`)되므로 **placeholder 그대로 두지 말 것**.
-
----
-
-## 6. Agent Zero 환경변수 설정
-
-`.env` 파일 생성:
-
-```env
-# LiteLLM이 요구하는 API key (CLIProxy는 검증 안 하지만 필수값)
-OPENAI_API_KEY=sk-placeholder
-
-CHAT_MODEL_DEFAULT=claude-sonnet-4-6
-CHAT_MODEL_BASE_URL=http://cliproxy:8317/v1
-CHAT_API_KEY=sk-placeholder
-
-UTILITY_MODEL_DEFAULT=claude-sonnet-4-6
-UTILITY_MODEL_BASE_URL=http://cliproxy:8317/v1
-UTILITY_API_KEY=sk-placeholder
-
-# Git Configuration (Agent Zero 컨테이너 내 git push 자동화)
-GIT_USER_NAME=your-github-username
-GIT_USER_EMAIL=your-email@example.com
-GITHUB_TOKEN=ghp_your_personal_access_token
-```
-
-> **보안 주의**: `.env` 파일에는 GitHub PAT 토큰이 포함되므로 `.gitignore`에 의해 저장소에서 제외됩니다. `.env.example`을 참고하여 `.env` 파일을 생성하세요.
-
-### 환경변수 설명
-
-| 변수 | 설명 |
+| 항목 | 비고 |
 |------|------|
-| `OPENAI_API_KEY` | LiteLLM이 OpenAI 프로바이더 사용 시 필수로 요구. CLIProxy는 실제 검증하지 않으므로 아무 값 입력 |
-| `CHAT_MODEL_DEFAULT` | 메인 채팅 모델명 |
-| `CHAT_MODEL_BASE_URL` | CLIProxy API 엔드포인트 (Docker 내부 주소) |
-| `UTILITY_MODEL_DEFAULT` | 유틸리티(요약, 압축 등) 모델명 |
-| `GIT_USER_NAME` | GitHub 사용자명 |
-| `GIT_USER_EMAIL` | Git 커밋용 이메일 |
-| `GITHUB_TOKEN` | GitHub Personal Access Token (repo 권한 필요) |
+| Docker Desktop (또는 Docker Engine + Compose v2) | 실행 가능 상태 |
+| 브라우저 | Track B OAuth 콜백 처리용 |
+| GitHub Personal Access Token (PAT) — `repo` scope | Agent Zero 컨테이너에서 `git push`, `gh pr create` 자동화에 사용 |
+| Telegram Bot Token + Chat ID | [§8](#8-telegram-bot-연동) 에서 발급. **양방향 제어가 핵심 기능이라 필수** |
+| **Track A 만**: API 키 (Anthropic / OpenAI / 등) | `.env` 에 입력 |
+| **Track B 만**: 사용할 CLI 의 구독 (Claude Pro/Max, OpenAI Codex 등) | OAuth 로그인 시 사용 |
 
 ---
 
-## 7. 컨테이너 실행
+## 3. 저장소 clone + 환경 설정
+
+### 3-1. clone
 
 ```bash
-cd agent-zero_cliproxy
-
-# 전체 시작
-docker compose up -d
-
-# 로그 확인
-docker logs -f cliproxy
+git clone https://github.com/devyoon91/az-cliproxy-docker
+cd az-cliproxy-docker
 ```
 
-CLIProxy 로그에서 오류 없이 시작 메시지가 나오면 성공입니다.
+### 3-2. 환경변수 — `.env`
+
+`.env.example` 을 복사한 뒤, 4개 섹션 중 **본인 트랙에 맞는 항목만** 채웁니다.
+
+```bash
+cp .env.example .env
+```
+
+`.env.example` 에 모든 옵션이 주석으로 분류되어 있으니 그대로 따라가면 됩니다:
+
+| 섹션 | 항목 | 필수성 |
+|------|------|--------|
+| **1) LLM 프로바이더** | Option A (Anthropic) / B (OpenAI) / C (CLIProxy) 중 택 1 | 필수 |
+| **2) Git** | `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GITHUB_TOKEN` | 필수 |
+| **3) Telegram** | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | 필수 ([§8](#8-telegram-bot-연동) 에서 발급) |
+| **4) Web Dashboard** | `DASHBOARD_TOKEN` | 선택 ([§9](#9-선택-web-dashboard-활성화)) |
+
+> `.env` 는 `.gitignore` 에 등록되어 있어 저장소에 올라가지 않습니다.
+> `.env.example` 의 주석에 모델명·base URL·비용표 등이 포함되어 있으니
+> 옵션 선택 시 같이 읽으세요.
+
+### 3-3. Agent Zero 설정 — `agent-zero/settings.json`
+
+```bash
+cp agent-zero/settings.example.json agent-zero/settings.json
+```
+
+`chat_model_provider` 값이 `.env` 에서 선택한 트랙과 **반드시 일치** 해야 합니다:
+
+| `.env` 옵션 | `settings.json` → `chat_model_provider` |
+|-------------|------------------------------------------|
+| Option A (Anthropic) | `"anthropic"` |
+| Option B (OpenAI) | `"openai"` |
+| Option C (CLIProxy) | `"other"` |
+
+### 3-4. (Track B 만) CLIProxy 설정 — `cliproxy/config.yaml`
+
+Track A (Direct API) 만 쓴다면 이 단계를 건너뛰어도 컨테이너는 부팅됩니다
+(CLIProxy 가 의존성으로만 떠 있고, Agent Zero 가 호출하지 않음).
+
+```bash
+cp cliproxy/config.example.yaml cliproxy/config.yaml
+```
+
+`config.example.yaml` 의 placeholder 들 — 특히 `secret-key:
+"your-management-password"` — 를 **실제 값으로 교체**하세요. CLIProxy
+Management UI(`http://localhost:8085`) 의 비밀번호 역할을 합니다.
+
+> **보안 주의**: Management UI 포트 8085 가 호스트로 노출되므로 placeholder
+> 그대로 두지 말 것. 운영 환경에선 강력한 비밀번호를 설정하세요.
 
 ---
 
-## 8. Claude OAuth 로그인
+## 4. 컨테이너 부팅
 
-### 실행 명령
-
-Windows CMD:
-```cmd
-docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -claude-login
+```bash
+docker compose up -d --build
 ```
 
-Windows Git Bash (경로 변환 방지):
+서비스 3개가 같은 `az-net` 브릿지 네트워크에 뜹니다 — 자세한 mount/port 구성은
+[`docker-compose.yml`](docker-compose.yml) 참조.
+
+| 서비스 | 포트 | 역할 |
+|--------|------|------|
+| `agent-zero` | 50001 | 웹 UI (메인 대시보드) |
+| `cliproxy` | 8317 / 8085 / 54545 | OpenAI 호환 API / Management UI / OAuth callback |
+| `telegram-bridge` | 8443 | Telegram Bot + 알림 webhook + (선택) /dashboard |
+
+부팅 확인:
+
+```bash
+docker ps                       # 3개 컨테이너 모두 Up 상태
+docker logs agent-zero --tail 20
+docker logs telegram-bridge --tail 20
+```
+
+---
+
+## 5. Track B 만: CLIProxy OAuth 로그인
+
+> Track A 만 쓴다면 [§6](#6-api-동작-확인) 으로.
+
+CLIProxy 가 떠 있어도 OAuth 토큰이 없으면 `/v1/models` 응답이 비어 있습니다.
+사용할 CLI 종류에 맞는 로그인 명령을 실행하세요.
+
+```bash
+# Claude Code (Pro/Max 구독)
+docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -claude-login
+
+# OpenAI Codex
+docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -codex-login
+
+# Google (Gemini)
+docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -login
+
+# Qwen
+docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -qwen-login
+```
+
+**Windows Git Bash** 에서는 경로 자동 변환 방지가 필요합니다:
+
 ```bash
 MSYS_NO_PATHCONV=1 docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -claude-login
 ```
 
-> **참고**: 컨테이너 내 실행 파일 경로는 `/CLIProxyAPI/CLIProxyAPI` (대소문자 구분). `cliproxyapi` 소문자로는 찾을 수 없습니다.
+> 실행 파일 경로는 대소문자 구분: `/CLIProxyAPI/CLIProxyAPI` (소문자 `cliproxyapi`
+> 로는 안 됨).
 
-### OAuth 인증 흐름
+### OAuth 흐름
 
-1. 터미널에 콜백 URL 입력 요청 → `http://localhost:54545/callback` 입력
-2. OAuth 인증 URL이 출력됨 → 브라우저에서 해당 URL 열기
-3. Claude 계정으로 로그인 및 권한 승인
-4. 브라우저가 `http://localhost:54545/callback?code=...&state=...` 로 리다이렉트
-5. 자동으로 콜백이 잡히지 않으면 → 브라우저 주소창의 **전체 URL을 복사**하여 터미널에 붙여넣기
-6. 인증 성공 시 토큰이 `./cliproxy/auth/` 에 저장됨
-
-### CLIProxy 사용 가능한 아규먼트
-
-| 아규먼트 | 설명 |
-|---------|------|
-| `-claude-login` | Claude OAuth 로그인 |
-| `-login` | Google 계정 로그인 (Gemini) |
-| `-codex-login` | OpenAI Codex OAuth 로그인 |
-| `-qwen-login` | Qwen OAuth 로그인 |
-| `-no-browser` | OAuth 시 브라우저 자동 열기 안함 |
-| `-tui` | 터미널 관리 UI 모드 |
-| `-config string` | 설정 파일 경로 지정 |
+1. 콜백 URL 입력 요청 → `http://localhost:54545/callback` 입력
+2. 인증 URL 출력 → 브라우저에서 열기
+3. 계정 로그인 + 권한 승인
+4. 자동 콜백이 잡히지 않으면 → 브라우저 주소창의 전체 URL 을 복사해 터미널에 붙여넣기
+5. 토큰이 `./cliproxy/auth/` 에 저장됨
 
 ---
 
-## 9. API 동작 확인
+## 6. API 동작 확인
+
+### Track A (Direct API)
+
+`.env` 의 API 키만 정확하면 별도 확인 없이 동작합니다. Agent Zero UI 에서 첫
+대화를 시도해 응답이 오면 OK.
+
+### Track B (CLIProxy)
 
 ```bash
 curl http://localhost:8317/v1/models
 ```
 
-정상 응답 예시:
+응답에 모델 ID 들이 보이면 OAuth 정상:
+
 ```json
 {
+  "object": "list",
   "data": [
-    {"id": "claude-opus-4-6", "object": "model", "owned_by": "anthropic"},
     {"id": "claude-sonnet-4-6", "object": "model", "owned_by": "anthropic"},
     ...
-  ],
-  "object": "list"
+  ]
 }
 ```
 
-### 사용 가능한 모델 목록
-
-| Model ID | Description |
-|----------|-------------|
-| `claude-opus-4-6` | 최신 Opus |
-| `claude-sonnet-4-6` | 최신 Sonnet |
-| `claude-sonnet-4-5-20250929` | Sonnet 4.5 |
-| `claude-opus-4-5-20251101` | Opus 4.5 |
-| `claude-opus-4-1-20250805` | Opus 4.1 |
-| `claude-sonnet-4-20250514` | Sonnet 4 |
-| `claude-3-7-sonnet-20250219` | Sonnet 3.7 |
-| `claude-haiku-4-5-20251001` | Haiku 4.5 |
+빈 배열이면 §5 의 OAuth 가 미완료된 상태입니다.
 
 ---
 
-## 10. Agent Zero UI 모델 설정
+## 7. Agent Zero UI 모델 설정
 
-`http://localhost:50001` 접속 후 모델을 설정합니다.
+`http://localhost:50001` 접속.
 
-### Plugins → _model_config
+모델 설정은 **Plugins → `_model_config` 플러그인** 에서 관리합니다 (UI 좌측
+사이드바 → Plugins). `settings.json` 의 값과 일치시키세요:
 
-모델 설정은 **`_model_config` 플러그인**에서 관리합니다.
+| 항목 | Track A — Anthropic | Track A — OpenAI | Track B — CLIProxy |
+|------|---------------------|------------------|---------------------|
+| **Chat Model Provider** | `Anthropic` | `OpenAI` | `Other OpenAI compatible` |
+| **Chat Model API Base** | (비워둠) | (비워둠) | `http://cliproxy:8317/v1` |
+| **Chat Model API Key** | `${ANTHROPIC_API_KEY}` | `${OPENAI_API_KEY}` | `sk-placeholder` |
+| **Utility Model** | 동일 패턴 | 동일 패턴 | 동일 패턴 |
 
-UI → **Plugins** → **_model_config** 에서:
+> **Docker 내부 DNS**: API base URL 은 `localhost` 가 아닌 컨테이너 이름
+> (`cliproxy`, `agent-zero`) 을 사용해야 합니다. Agent Zero 컨테이너에서 `localhost`
+> 는 자기 자신을 가리키기 때문입니다.
 
-| 항목 | 값 |
-|------|------|
-| **Chat Model Provider** | `Other OpenAI compatible` |
-| **Chat Model Name** | 사용할 모델명 (예: `gpt-4.1`, `o3`) |
-| **Chat Model API Base** | `http://cliproxy:8317/v1` |
-| **Chat Model API Key** | `sk-placeholder` |
-| **Utility Model Provider** | `Other OpenAI compatible` |
-| **Utility Model Name** | 경량 모델 (예: `gpt-4.1-mini`) |
-| **Utility Model API Base** | `http://cliproxy:8317/v1` |
-| **Utility Model API Key** | `sk-placeholder` |
-| **Embedding** | `huggingface` / `sentence-transformers/all-MiniLM-L6-v2` (기본 유지) |
-
-설정 파일 위치: `/a0/usr/plugins/_model_config/config.json`
-
-### 주의사항
-
-- Provider를 `OpenAI`가 아닌 **`Other OpenAI compatible`** 선택
-- API base URL은 `localhost`가 아닌 **`cliproxy`** (Docker 내부 DNS)
-- **API Key 필수** — CLIProxy가 검증하지 않아도 LiteLLM이 요구하므로 `sk-placeholder` 입력
+설정 파일 위치 (호스트 마운트됨): `agent-zero/usr-plugins/_model_config/config.json`.
+`docker compose up --force-recreate` 로 재생성해도 보존됩니다.
 
 ---
 
-## 11. Git + GitHub CLI 자동화
+## 8. Telegram Bot 연동
 
-Agent Zero 컨테이너 안에서 Git clone/commit/push는 물론, GitHub CLI(`gh`)를 통해 PR 생성, 이슈 관리까지 자동으로 수행할 수 있습니다.
+폰에서 Agent Zero 를 양방향 제어하는 커스텀 브릿지입니다. 포트포워딩/VPN 없이
+동작 — Telegram 클라우드가 중계합니다.
 
-### 동작 원리
+> **참고**: Agent Zero 에 `_telegram_integration` 내장 플러그인이 있지만,
+> 기본 알림 + `/project`, `/config` 정도만 지원합니다. 이 저장소의 커스텀 브릿지가
+> **웹 채팅 실시간 모니터링, 멀티채팅, 토큰/비용 추적, 예산 알림, 가격 drift 감지,
+> 문서 열람, 백업** 등 풍부한 기능을 제공하니 **내장 플러그인은 끄고 커스텀
+> 브릿지를 사용하세요.**
 
-1. 컨테이너 시작 시 `git-init.sh` 스크립트가 실행됨
-2. `.env`의 `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GITHUB_TOKEN`으로 Git 인증 설정
-3. GitHub CLI(`gh`) 자동 설치 및 PAT 토큰으로 인증
-4. Agent Zero가 `work_dir/` 안에서 clone → 작업 → commit → push → PR 생성 수행
+### 8-1. 봇 생성 + 토큰 발급
 
-### git-init.sh
+1. Telegram 앱에서 `@BotFather` 검색 → 대화 시작
+2. `/newbot` → 봇 이름 + username 설정
+3. **Bot Token** 수령 (형식: `123456789:ABCdef...`)
+4. 생성된 봇에게 아무 메시지 1건 전송 (채팅방 활성화)
+5. 브라우저에서 `https://api.telegram.org/bot{TOKEN}/getUpdates` 열기
+6. 응답에서 `chat.id` 값을 메모 → **Chat ID**
 
-`agent-zero/git-init.sh` 파일이 컨테이너 시작 시 자동 실행됩니다:
+### 8-2. `.env` 에 입력
 
-```bash
-#!/bin/sh
-# Git 설정
-git config --global user.name "${GIT_USER_NAME}"
-git config --global user.email "${GIT_USER_EMAIL}"
-git config --global credential.helper store
-echo "https://${GIT_USER_NAME}:${GITHUB_TOKEN}@github.com" > /root/.git-credentials
-
-# GitHub CLI 설치 (첫 기동 시 1~2분 소요)
-if ! command -v gh > /dev/null 2>&1; then
-    # gh 설치...
-fi
-
-# gh 인증
-echo "${GITHUB_TOKEN}" | gh auth login --with-token
-```
-
-### GitHub PAT 생성 방법
-
-1. GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. "Generate new token (classic)" 클릭
-3. 권한 선택: `repo` (Full control of private repositories)
-4. 토큰 생성 후 `.env`의 `GITHUB_TOKEN`에 입력
-
-### 사용 예시
-
-**기본: clone → 작업 → push**
-> "https://github.com/username/my-project 를 clone 받아서 README.md를 수정하고 commit 후 push 해줘"
-
-**브랜치 + PR 생성**
-> "feature/login 브랜치 만들어서 로그인 기능 구현하고 PR 올려줘"
-
-**이슈 기반 작업**
-> "이슈 #3 확인해서 수정하고 PR 만들어줘"
-
-Agent Zero가 컨테이너 내부에서:
-```bash
-cd /a0/work_dir
-git clone https://github.com/username/my-project
-cd my-project
-git checkout -b feature/login
-# 작업 수행...
-git add . && git commit -m "Add login feature"
-git push -u origin feature/login
-gh pr create --title "Add login feature" --body "로그인 기능 추가"
-```
-
-### 보안 주의사항
-
-- `.env` 파일에 PAT 토큰이 포함되므로 **절대 저장소에 올리지 마세요**
-- `.gitignore`에 `.env`가 등록되어 있어 자동으로 제외됨
-- `.env.example`을 참고하여 `.env` 파일을 생성하세요
-- 컨테이너 내부의 `/root/.git-credentials`에 토큰이 저장됨 (컨테이너 재시작 시 재생성)
-- `gh auth login`은 컨테이너 시작 시 자동 수행 (재시작마다 재인증)
-
----
-
-## 12. 프롬프트 커스터마이징
-
-### 기본 프롬프트 추출
-
-```bash
-docker cp agent-zero:/a0/prompts ./agent-zero/prompts
-```
-
-### 주요 프롬프트 파일
-
-| File | Description |
-|------|-------------|
-| `agent.system.main.md` | 메인 시스템 프롬프트 (다른 파일을 include) |
-| `agent.system.main.role.md` | **에이전트 역할 정의 (가장 핵심)** |
-| `agent.system.behaviour.md` | 행동 규칙 |
-| `agent.system.behaviour_default.md` | 기본 행동 규칙 |
-| `agent.system.main.solving.md` | 문제 해결 전략 |
-| `agent.system.main.communication.md` | 커뮤니케이션 스타일 |
-| `agent.system.main.tips.md` | 추가 팁/지침 |
-| `agent.system.tool.code_exe.md` | 코드 실행 도구 설명 |
-| `agent.system.tool.browser.md` | 브라우저 도구 설명 |
-| `agent.system.tool.memory.md` | 메모리 도구 설명 |
-
-### 프롬프트 구조
-
-`agent.system.main.md`가 진입점이며 include로 다른 파일을 로드합니다:
-
-```markdown
-# Agent Zero System Manual
-{{ include "./agent.system.main.role.md" }}
-{{ include "./agent.system.main.environment.md" }}
-{{ include "./agent.system.main.communication.md" }}
-{{ include "./agent.system.main.solving.md" }}
-{{ include "./agent.system.main.tips.md" }}
-```
-
-### 커스텀 예시
-
-`agent-zero/prompts/agent.system.main.role.md` 수정:
-
-```markdown
-## Your role
-You are a senior full-stack developer agent.
-You write clean, production-ready code.
-You always commit to git with meaningful messages.
-You write tests for all code you produce.
-You communicate in Korean.
-```
-
-### 반영
-
-```bash
-docker compose up -d agent-zero --force-recreate
-```
-
----
-
-## 13. 설정 영속화
-
-Agent Zero UI에서 변경한 설정은 컨테이너 내부 `/a0/tmp/settings.json`에 저장됩니다. 컨테이너 재시작 시 설정이 초기화되는 것을 방지하기 위해 호스트에 마운트합니다.
-
-### 설정 추출 (최초 1회)
-
-UI에서 설정 변경 후 Save → 컨테이너에서 추출:
-```bash
-docker exec agent-zero cat /a0/tmp/settings.json > ./agent-zero/settings.json
-```
-
-### docker-compose 볼륨 마운트
-
-```yaml
-volumes:
-  - ./agent-zero/settings.json:/a0/tmp/settings.json
-```
-
-이후 UI에서 설정을 변경하면 호스트의 `settings.json`에도 자동 반영됩니다.
-
----
-
-## 14. Telegram Bot 원격 제어
-
-Android 폰에서 Telegram을 통해 Agent Zero를 원격으로 제어할 수 있습니다. 포트포워딩이나 VPN 없이 동작합니다.
-
-> **주의**: Agent Zero에 `_telegram_integration` 내장 플러그인이 있지만, 기본 알림과 `/project`, `/config` 등 제한적 기능만 지원합니다. 이 프로젝트의 커스텀 Telegram Bridge는 웹 채팅 실시간 모니터링, 멀티채팅, 토큰 사용량 추적, 문서 열람 등 더 많은 기능을 제공합니다. **내장 `_telegram_integration` 플러그인은 끄고, 커스텀 Telegram Bridge를 사용하세요.**
-
-### 동작 원리
-
-```
-폰 → Telegram 클라우드 서버 → Bridge Bot (Docker, polling) → Agent Zero
-폰 ← Telegram 클라우드 서버 ← Bridge Bot (Docker)          ← Agent Zero
-```
-
-- Bridge Bot이 Telegram 서버에 주기적으로 polling하여 새 메시지를 가져옴
-- 폰과 PC가 직접 통신하지 않음 — Telegram 클라우드가 중계
-- 인터넷만 연결되어 있으면 어디서든 제어 가능
-
-### Telegram Bot 생성
-
-1. Telegram 앱 설치 (Android Play Store)
-2. 검색창에 `@BotFather` 검색 → 대화 시작
-3. `/newbot` 입력 → 봇 이름, username 설정
-4. **Bot Token** 수령 (형식: `123456789:ABCdefGHI...`)
-5. 생성된 봇에게 아무 메시지 전송 (채팅방 활성화)
-6. 브라우저에서 `https://api.telegram.org/bot{TOKEN}/getUpdates` 열기
-7. 응답에서 `chat.id` 값 확인 → **Chat ID**
-
-### 환경변수 설정
-
-`.env`에 추가:
 ```env
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_CHAT_ID=123456789
 ```
 
-### 실행
+### 8-3. 재기동
 
 ```bash
-docker compose up -d --build telegram-bridge
+docker compose up -d --force-recreate telegram-bridge
 ```
 
-### 사용법
+### 8-4. 핵심 명령
 
-| Telegram 명령 | 설명 |
-|---------------|------|
-| `/start` | 봇 시작 안내 |
-| `/status` | Agent Zero 상태 확인 (연결, CSRF 토큰, 컨텍스트) |
-| `/new` | 새 대화 시작 (컨텍스트 초기화) |
-| `/help` | 도움말 |
-| 일반 메시지 | Agent Zero에 지시 전달 → 응답 수신 |
+자세한 명령 reference 와 동작 원리는 [docs/telegram-bot.md](docs/telegram-bot.md)
+에. 자주 쓰는 것:
 
-### 알림 Webhook
+| 그룹 | 명령 |
+|------|------|
+| 대화 | 일반 메시지 → AZ 지시, `/new`, `/chats`, `/switch [N]` |
+| 모니터 | `/monitor_on`/`off`, `/track_chat_on`/`off`, `/verbose_on`/`off` |
+| 비용 | `/usage`, `/today`, `/week`, `/tasks [N]`, `/budget [day\|week] [USD]`, `/pricing` |
+| 파일 | `/logs`, `/docs`, `/backup` |
+| 상태 | `/status`, `/help` |
 
-Agent Zero 작업 중 알림을 Telegram으로 보내려면:
+### 8-5. 알림 webhook (외부 → Telegram)
+
+Agent Zero 가 작업 완료 시 알림을 Telegram 으로 보내도록:
+
 ```bash
 curl -X POST http://telegram-bridge:8443/notify \
      -H 'Content-Type: application/json' \
      -d '{"text": "작업 완료!"}'
 ```
 
-Agent Zero에게 지시할 때 활용:
-> "작업 완료되면 curl로 http://telegram-bridge:8443/notify 에 결과를 알려줘"
+Agent Zero 에게 지시할 때:
+> "작업 완료되면 curl 로 http://telegram-bridge:8443/notify 에 결과 알려줘"
 
-### 기술 세부사항
+---
 
-- Agent Zero API: `/message_async`로 메시지 전송, `/poll`로 응답 수집
-- CSRF 보호: `/csrf_token`에서 토큰 획득 후 `X-CSRF-Token` 헤더에 포함
-- 세션 유지: aiohttp CookieJar로 쿠키 유지, 403 시 자동 재발급
-- 보안: `TELEGRAM_CHAT_ID`로 본인만 봇 사용 가능 (다른 사용자 차단)
+## 9. (선택) Web Dashboard 활성화
 
-### Web Dashboard (선택, M5-E)
+`telegram-bridge:8443` 에 비용/사용량 차트 페이지가 함께 떠 있습니다 (Chart.js
+기반). 텔레그램 텍스트 명령 (`/today`, `/week`, `/usage`) 외에 시각화가 필요할
+때 사용하세요.
 
-`telegram-bridge` 의 8443 포트에 비용/사용량 차트 페이지가 함께 떠 있습니다 (issue #23). 텔레그램 텍스트 명령어 (`/today`, `/week`, `/usage`) 외에 시각화가 필요할 때 사용하세요.
+### 활성화
 
-**활성화 (기본은 비활성)**:
-
-`.env` 에 토큰 추가 후 컨테이너 재기동.
 ```bash
 echo "DASHBOARD_TOKEN=$(openssl rand -hex 16)" >> .env
 docker compose up -d --force-recreate telegram-bridge
 ```
 
-`DASHBOARD_TOKEN` 이 빈 값/미설정이면 `/dashboard` 와 `/api/stats` 둘 다 **404** 로 차단됩니다 (대시보드 자체가 켜지지 않음). 임의의 비밀번호 역할을 하므로 외부 노출하지 마세요.
+`DASHBOARD_TOKEN` 이 빈 값/미설정이면 `/dashboard` 와 `/api/stats` 둘 다
+**404** 로 차단됩니다.
 
-**접속**:
+### 접속
+
+```bash
+# 브라우저
+http://localhost:8443/dashboard?token=<TOKEN>
+
+# JSON API (헤더 인증 권장 — 액세스 로그에 토큰 안 남음)
+curl -H "X-Dashboard-Token: <TOKEN>" http://localhost:8443/api/stats
 ```
-브라우저:  http://localhost:8443/dashboard?token=<TOKEN>
-JSON API:  curl "http://localhost:8443/api/stats?range=30d&token=<TOKEN>"
-헤더 인증: curl -H "X-Dashboard-Token: <TOKEN>" http://localhost:8443/api/stats
-```
 
-쿼리 파라미터(`?token=`)는 액세스 로그/프록시에 토큰이 남으므로, 운영 환경에선 헤더 인증을 권장합니다.
+차트: 일별 비용 (30일 bar) · 모델별 비용 (7일 doughnut) · 태스크 소요시간 vs
+비용 (scatter, 프로파일별 색상) · 윈도우 합계.
 
-**제공 차트**: 일별 비용 (30일 bar), 모델별 비용 (7일 doughnut), 태스크 소요시간 vs 비용 (scatter, 프로파일별 색상), 윈도우 합계.
+### 원격 접속
 
-**원격 접속**: 8443 포트는 `docker-compose.yml` 에서 호스트 로컬에만 바인딩됩니다. 원격에서 보려면 SSH 포트포워딩을 사용하세요:
+8443 은 호스트 로컬에만 바인딩됩니다. 원격에서 보려면 SSH 포트포워딩을
+사용하세요:
+
 ```bash
 ssh -L 8443:localhost:8443 <host>
-# 로컬 브라우저에서 http://localhost:8443/dashboard?token=<TOKEN> 접속
 ```
 
 ---
 
-## 15. 팁: 호스트 파일시스템 접근
+## 10. (선택) 개인화 저장소 분리
 
-기본적으로 Agent Zero는 Docker 컨테이너 안에서 격리되어 `work_dir/`만 접근 가능합니다. 호스트 PC의 프로젝트 폴더에 직접 접근하고 싶다면 `docker-compose.yml`에 볼륨을 추가하세요.
+**이 저장소 = 하네스 킷 (공용)**, 회사/팀/개인 고유 내용은 **별도 저장소**에서
+관리하는 것을 권장합니다. 이유: 하네스 킷 업데이트 시 충돌 없고, 개인화 내용을
+private 으로 유지 가능.
+
+### 패턴
+
+```
+az-cliproxy-docker/                ← 하네스 킷 (이 저장소)
+my-agent-config/                   ← 개인화 (별도 저장소)
+  ├── agents/                      ← 프로필 (서브 에이전트)
+  ├── skills/                      ← 스킬 (SKILL.md 기반 지침서)
+  ├── knowledge/                   ← 코딩 표준, 아키텍처 문서
+  ├── templates/                   ← 프로젝트 보일러플레이트
+  └── instruments/                 ← 커스텀 인스트루먼트
+```
+
+템플릿: [az-agent-config-template](https://github.com/devyoon91/az-agent-config-template).
+
+### 마운트는 `docker-compose.override.yml` 로
+
+main `docker-compose.yml` 에 sibling 디렉토리 (`../my-agent-config/...`)
+마운트를 **추가하지 마세요**. 다른 환경/사용자에서 디렉토리가 없으면 부팅 실패
+([issue #53](https://github.com/devyoon91/az-cliproxy-docker/issues/53)).
+
+대신 [`docker-compose.override.yml`](https://docs.docker.com/compose/multiple-compose-files/)
+을 사용 — Docker Compose 가 `docker-compose.yml` 과 자동 머지하고, 이 파일은
+gitignored 입니다:
 
 ```yaml
-# agent-zero 서비스의 volumes에 추가
-volumes:
-  - C:/Users/myname/projects:/a0/work_dir/host-projects   # Windows
-  - /home/myname/projects:/a0/work_dir/host-projects       # Linux/Mac
+# docker-compose.override.yml — 추적 안 함
+services:
+  agent-zero:
+    volumes:
+      # ── 스킬 (✅ 통째 마운트 안전) ──
+      - ../my-agent-config/skills:/a0/usr/skills:ro
+      # ── 프로필 (⚠️ 반드시 개별 마운트) ──
+      - ../my-agent-config/agents/my-reviewer:/a0/usr/agents/my-reviewer:ro
+      # ── 지식베이스 (⚠️ 서브 디렉토리로) ──
+      - ../my-agent-config/knowledge:/a0/knowledge/custom/team:ro
 ```
 
-Agent Zero에서 `/a0/work_dir/host-projects/`로 접근하면 호스트의 실제 프로젝트 파일을 읽고 수정할 수 있습니다.
+> **마운트 주의**: `agents/` 는 통째로 마운트하면 내장 프로필 (developer,
+> researcher 등) 이 덮어씌워집니다. **개별 마운트** 필수. `skills/` 는
+> `usr/skills/` 가 내장과 분리되어 있어 통째 마운트 안전.
 
-> **주의**: 호스트 파일시스템을 마운트하면 Agent Zero가 해당 경로의 파일을 삭제/수정할 수 있습니다. 중요한 디렉토리는 읽기 전용(`:ro`)으로 마운트하는 것을 권장합니다.
-> ```yaml
-> - C:/Users/myname/documents:/a0/work_dir/docs:ro   # 읽기 전용
-> ```
-
----
-
-## 16. 팁: 개인화 저장소 분리
-
-이 프로젝트는 **하네스 킷(공용 환경)**으로 유지하고, 회사/팀/개인 고유 내용은 **별도 저장소**에서 관리하는 것을 권장합니다.
-
-### 구조
-
-```
-az-cliproxy-docker/              ← 하네스 킷 (이 저장소)
-  ├── docker-compose.yml
-  ├── agent-zero/prompts/         ← 기본 프롬프트
-  └── agent-zero/agents/          ← 기본 프로필 (developer, reviewer, devops)
-
-my-agent-config/                 ← 개인화 저장소 (별도 관리)
-  ├── agents/                     ← Profile (서브 에이전트)
-  ├── skills/                     ← Skill (SKILL.md 기반 지침서)
-  ├── knowledge/                  ← 코딩 표준, API 규칙, 아키텍처 문서
-  ├── templates/                  ← 프로젝트 보일러플레이트
-  └── instruments/                ← 커스텀 인스트루먼트
-```
-
-### 개인화 저장소 생성
-
-템플릿을 fork하여 시작하는 것을 권장합니다:
-- **[az-agent-config-template](https://github.com/devyoon91/az-agent-config-template)** — 기본 프로필(reviewer, devops) + 디렉토리 구조 제공
-
-또는 직접 생성:
-```bash
-mkdir my-agent-config
-cd my-agent-config
-git init
-
-mkdir knowledge agents templates instruments
-
-# 예시: 코딩 표준 문서 추가
-echo "# 회사 코딩 표준" > knowledge/coding-standards.md
-
-# 예시: 프로젝트 템플릿
-mkdir templates/springboot-api
-```
-
-### docker-compose 볼륨 연결
-
-`docker-compose.yml`의 agent-zero 서비스에 개인화 저장소를 마운트합니다:
-
-```yaml
-# agent-zero 서비스의 volumes에 추가
-volumes:
-  # ── 에이전트 프로필 (⚠️ 반드시 개별 마운트) ──
-  # - ../my-agent-config/agents/my-reviewer:/a0/usr/agents/my-reviewer:ro
-  # 프로필 추가 시 여기에 한 줄씩 추가
-
-  # ── 스킬 (✅ 통째 마운트 가능) ──
-  - ../my-agent-config/skills:/a0/usr/skills:ro
-
-  # ── 지식베이스 (⚠️ 서브 디렉토리로 마운트) ──
-  - ../my-agent-config/knowledge:/a0/knowledge/custom/team:ro
-
-  # ── 아래는 통째 마운트 가능 ──
-  - ../my-agent-config/instruments:/a0/instruments/custom:ro
-  - ../my-agent-config/templates:/a0/work_dir/templates:ro
-```
-
-> **경로 주의**: `../my-agent-config`는 docker-compose.yml 기준 상대 경로입니다. 개인화 저장소를 같은 상위 디렉토리에 clone하세요.
+`./scripts/preflight.sh` 가 sibling 마운트 정책을 자동 검사합니다 — CI 에서도
+PR 시점에 발견되면 fail.
 
 ### Profile vs Skill
-
-개인화 저장소에서 두 가지 확장 방식을 지원합니다:
 
 | | Profile (`agents/`) | Skill (`skills/`) |
 |---|---|---|
 | 정체 | 독립된 전문가 에이전트 | 지침서/매뉴얼 (SKILL.md) |
 | 실행 | 별도 에이전트 인스턴스 생성 | 현재 에이전트에 지침 추가 |
 | 활성화 | `call_subordinate` 명시 호출 | `trigger_patterns` 키워드 자동 매칭 |
-| 마운트 | 개별 마운트 (`/a0/usr/agents/{이름}`) | 통째 마운트 (`/a0/usr/skills`) |
 | 적합한 경우 | 깊은 도메인 지식, 별도 인격 필요 | 절차/체크리스트, 가벼운 지침 |
 
-> **마운트 주의**: `agents/`는 내장 프로필(developer, researcher 등)이 덮어씌워지지 않도록 **개별 마운트** 필수. `skills/`는 `usr/skills/`가 내장 스킬과 분리되어 있어 **통째 마운트 안전**.
-
-### 지식베이스 활용 예시
-
-`my-agent-config/knowledge/` 에 넣으면 Agent Zero가 자동으로 검색합니다:
-
-```
-knowledge/
-  ├── coding-standards.md     ← "API 만들어줘" → 이 표준에 맞게 생성
-  ├── api-conventions.md      ← REST URL/응답 형식 규칙
-  ├── architecture.md         ← 레이어 구조, 패턴 규칙
-  └── git-workflow.md         ← 브랜치 전략, 커밋 컨벤션
-```
-
-### 프로젝트 템플릿 활용 예시
-
-```
-templates/
-  ├── springboot-api/         ← "Spring Boot API 프로젝트 만들어줘"
-  ├── nextjs-app/             ← "Next.js 앱 만들어줘"
-  └── python-fastapi/         ← "FastAPI 프로젝트 만들어줘"
-```
-
-Agent Zero에게:
-> "/a0/work_dir/templates/springboot-api 를 복사해서 새 프로젝트 만들어줘"
-
-### 장점
-
-- 하네스 킷과 개인화 내용이 **완전 분리** — 킷 업데이트 시 충돌 없음
-- 개인화 저장소를 **팀끼리 공유** 가능 (private repo)
-- 여러 환경(개인 PC, 서버)에서 **동일한 개인화** 적용
-- 하네스 킷은 공개 가능, 개인화 내용은 비공개 유지
+자세한 가이드: [docs/agent-profiles.md](docs/agent-profiles.md),
+[docs/extensibility.md](docs/extensibility.md).
 
 ---
 
-## 17. 트러블슈팅
+## 11. 핵심 기능 cross-link
 
-### CLIProxy `mkdir: no such file or directory`
+GUIDE 본문은 부팅까지의 walkthrough 에 집중하기 때문에, 운영 단계의 깊은 주제는
+별도 문서로 분리되어 있습니다.
 
-**원인**: `config.yaml`에 `auth-dir` 필드 누락
+| 주제 | 문서 |
+|------|------|
+| **Telegram Bot 명령 reference + 동작 원리** | [docs/telegram-bot.md](docs/telegram-bot.md) |
+| **task_report 시스템** — 태스크 단위 비용/시간/모델 영속 기록 (`/today`, `/week`, `/tasks` 의 데이터 source) | [docs/usage.md](docs/usage.md) · [docs/optimization.md](docs/optimization.md) |
+| **에이전트 프로필 + 서브 에이전트 호출** | [docs/agent-profiles.md](docs/agent-profiles.md) |
+| **MCP 서버** (Sequential Thinking, Git, Fetch 등) | [docs/mcp-guide.md](docs/mcp-guide.md) |
+| **스케줄러** (cron 기반, 예약 실행) | [docs/scheduler.md](docs/scheduler.md) |
+| **백업/복원** (full / config / light, Telegram 원격 백업) | [docs/backup.md](docs/backup.md) |
+| **비용 최적화** (프롬프트 캐싱, 모델 분리, 예산) | [docs/optimization.md](docs/optimization.md) |
+| **AZ 아키텍처 + 확장점** | [docs/architecture.md](docs/architecture.md) · [docs/extensibility.md](docs/extensibility.md) |
+| **번들된 플러그인 — chat_pdf_export** (사이드바 PDF 내보내기, 한국어 폰트 포함) | [agent-zero/usr-plugins/chat_pdf_export/README.md](agent-zero/usr-plugins/chat_pdf_export/README.md) |
+| **번들된 플러그인 — dashboard_link** (UI 에서 대시보드 열기) | [agent-zero/usr-plugins/dashboard_link/README.md](agent-zero/usr-plugins/dashboard_link/README.md) |
+| **프롬프트 캐싱** (Anthropic 자동 적용 메커니즘) | [docs/prompt-caching.md](docs/prompt-caching.md) |
 
-**해결**: config.yaml에 추가
+### 호스트 파일시스템 접근 (선택)
+
+기본적으로 Agent Zero 는 `work_dir/` 만 접근 가능합니다. 호스트 PC 의 프로젝트
+폴더에 직접 접근하려면 `docker-compose.override.yml` 에 볼륨을 추가하세요 (main
+yml 수정 X — §10 참조):
+
 ```yaml
-auth-dir: "/root/.cli-proxy-api"
+services:
+  agent-zero:
+    volumes:
+      - C:/Users/myname/projects:/a0/work_dir/host-projects   # Windows
+      - /home/myname/projects:/a0/work_dir/host-projects      # Linux/Mac
+      # 중요한 디렉토리는 :ro 권장
+      - C:/Users/myname/documents:/a0/work_dir/docs:ro
 ```
+
+### 프롬프트 커스터마이징
+
+`docker-compose.yml` 이 `./agent-zero/prompts:/a0/prompts` 를 마운트하므로
+호스트의 prompts 디렉토리를 수정하면 컨테이너 재기동 시 반영됩니다.
+
+```bash
+# 첫 추출 (선택)
+docker cp agent-zero:/a0/prompts ./agent-zero/prompts
+
+# 수정 후 반영
+docker compose up -d agent-zero --force-recreate
+```
+
+핵심 파일:
+
+| File | Description |
+|------|-------------|
+| `agent.system.main.role.md` | **에이전트 역할 정의 (가장 핵심)** |
+| `agent.system.behaviour.md` | 행동 규칙 |
+| `agent.system.main.solving.md` | 문제 해결 전략 |
+| `agent.system.main.communication.md` | 커뮤니케이션 스타일 |
+
+---
+
+## 12. 트러블슈팅
+
+### CLIProxy `mkdir: no such file or directory` (Track B)
+
+`config.yaml` 에 `auth-dir` 누락 → `auth-dir: "/root/.cli-proxy-api"` 추가.
 
 ### `executable file not found: cliproxyapi`
 
-**원인**: 실행 파일명이 다름
+실행 파일은 대소문자 구분: `/CLIProxyAPI/CLIProxyAPI`. 소문자로는 못 찾음.
 
-**해결**: 올바른 경로 사용
-```bash
-# Windows CMD
-docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -claude-login
+### `callback URL missing code` (Track B OAuth)
 
-# Git Bash
-MSYS_NO_PATHCONV=1 docker exec -it cliproxy /CLIProxyAPI/CLIProxyAPI -claude-login
-```
+브라우저 자동 콜백이 안 잡히면, 리다이렉트된 전체 URL
+(`http://localhost:54545/callback?code=...&state=...`) 을 복사해 터미널에 붙여넣기.
 
-### `callback URL missing code`
+### `AuthenticationError: OPENAI_API_KEY` (Track B)
 
-**원인**: 콜백 URL에 인증 코드가 포함되지 않음
+LiteLLM 이 OpenAI 프로바이더 사용 시 키를 필수로 요구. `.env` 에:
 
-**해결**: 브라우저에서 승인 후 리다이렉트된 전체 URL (`http://localhost:54545/callback?code=...&state=...`)을 복사하여 터미널에 붙여넣기
-
-### `AuthenticationError: OPENAI_API_KEY`
-
-**원인**: LiteLLM이 OpenAI 프로바이더 사용 시 API key를 필수로 요구
-
-**해결**: `.env`에 추가
 ```env
 OPENAI_API_KEY=sk-placeholder
 ```
 
-### Agent Zero에서 CLIProxy 연결 안됨
+### Agent Zero 에서 CLIProxy 에 연결 안 됨
 
-**원인**: `localhost` 사용
-
-**해결**: Docker 내부 DNS인 `http://cliproxy:8317/v1` 사용. Agent Zero 컨테이너에서 `localhost`는 자기 자신을 가리킴
+`localhost` 사용 중이라면 → 컨테이너 이름인 `http://cliproxy:8317/v1` 로 변경.
+Agent Zero 컨테이너에서 `localhost` 는 자기 자신을 가리킵니다.
 
 ### Telegram Bot `CSRF token missing or invalid` (403)
 
-**원인**: Agent Zero의 CSRF 보호 — 모든 POST 요청에 토큰 필요
+Agent Zero 의 CSRF 보호 — 모든 POST 에 토큰 필요. Bridge 가 자동으로 토큰을
+획득하지만, 지속되면:
 
-**해결**: Bridge Bot이 자동으로 `/csrf_token`에서 토큰을 획득하고 헤더에 포함합니다. 403이 지속되면:
 ```bash
 docker compose restart telegram-bridge
 ```
 
 ### Telegram Bot `getUpdates` 결과가 비어있음
 
-**원인**: 봇에게 메시지를 아직 보내지 않음
-
-**해결**: Telegram 앱에서 생성한 봇을 검색 → 아무 메시지 전송 → getUpdates 재호출
+봇에게 아직 메시지를 보내지 않은 상태 → Telegram 앱에서 봇 검색 → 아무 메시지
+1건 전송 → 다시 호출.
 
 ### Telegram Bot `Cannot connect to host agent-zero:80`
 
-**원인**: Agent Zero 컨테이너가 아직 시작되지 않았거나, telegram-bridge가 먼저 기동됨
+Agent Zero 가 아직 안 떴거나 telegram-bridge 가 먼저 기동된 경우. 둘 다 부팅
+확인 후 bridge 만 재시작:
 
-**해결**:
 ```bash
-# 1. Agent Zero 상태 확인
-docker ps
-docker logs agent-zero --tail 5
-
-# 2. Agent Zero가 정상이면 telegram-bridge만 재시작
-docker compose restart telegram-bridge
-
-# 3. Agent Zero가 안 떠있으면 전체 시작
-docker compose up -d
+docker ps                                   # agent-zero 상태 확인
+docker compose restart telegram-bridge      # bridge 만 재시작
 ```
 
 ### Agent Zero 설정이 재시작 시 초기화됨
 
-**원인**: `tmp/settings.json`이 볼륨 마운트되지 않음
+`docker-compose.yml` 이 `./agent-zero/settings.json:/a0/usr/settings.json`
+와 `./agent-zero/usr-plugins:/a0/usr/plugins` 를 마운트하므로 정상이면 보존됩니다.
+초기화된다면 호스트 측 파일이 비어있거나 마운트 권한 문제 — `docker logs
+agent-zero` 확인.
 
-**해결**: [13. 설정 영속화](#13-설정-영속화) 참조
+### `force-recreate` 후 모델 설정이 사라짐
+
+`docker-compose.yml` 의 `usr-plugins` 마운트가 `/a0/usr/plugins/_model_config/config.json`
+을 보존합니다. 이 마운트가 제거된 상태로 `force-recreate` 하면 default_config.yaml
+의 (잘못된) 기본값으로 떨어지니, 마운트를 복구한 뒤 재기동하세요.
 
 ---
 
@@ -824,6 +541,5 @@ docker compose up -d
 
 - [Agent Zero GitHub](https://github.com/agent0ai/agent-zero)
 - [CLIProxyAPI GitHub](https://github.com/router-for-me/CLIProxyAPI)
-- [CLIProxy Documentation](https://help.router-for.me/)
-- [Agent Zero Docker Hub](https://hub.docker.com/r/agent0ai/agent-zero)
-- [CLIProxy Docker Hub](https://hub.docker.com/r/eceasy/cli-proxy-api)
+- [CLIProxy 문서](https://help.router-for.me/)
+- [az-agent-config-template](https://github.com/devyoon91/az-agent-config-template) — 개인화 저장소 템플릿
