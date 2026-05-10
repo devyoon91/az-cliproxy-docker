@@ -5,7 +5,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     python-telegram-bot==21.* \
     aiohttp==3.* \
-    httpx
+    httpx \
+    openai
 
 COPY bot.py .
 COPY pricing/ ./pricing/

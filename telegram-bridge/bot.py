@@ -913,6 +913,10 @@ def main():
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # Voice / audio messages → STT → send_to_agent_zero (text path).
+    from telegram_handlers.voice import handle_voice  # noqa: E402
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+
     logger.info("Telegram Bridge Bot started (with monitor + multi-chat)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
