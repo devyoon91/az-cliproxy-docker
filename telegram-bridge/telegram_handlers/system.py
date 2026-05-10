@@ -75,5 +75,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /budget [day|week] [USD] → 예산 한도 + 자동 알림\n"
         "  /pricing [list|diff|snapshot] → LiteLLM 가격 스냅샷 + drift\n"
         "  /backup → 설정 경량 백업 (ZIP 파일 전송)\n"
-        "  /help → 도움말"
+        "  /help → 도움말\n\n"
+        "음성:\n"
+        "  🎤 voice / audio 메시지 전송 → STT 변환 후 AZ에 전달\n"
+        "  (OPENAI_API_KEY 필요 · 모델 whisper-1 · 언어 ko 기본)"
     )

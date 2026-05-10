@@ -93,6 +93,11 @@ services:
       # M5-E: web dashboard token (issue #23). Empty/unset disables /dashboard
       # and /api/stats. Set to any non-empty string to enable.
       - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
+      # Voice → STT → AZ. Empty/unset disables voice handling (handler still
+      # registers but replies "음성 인식이 비활성화" instead of crashing).
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - STT_MODEL=${STT_MODEL:-whisper-1}
+      - STT_LANGUAGE=${STT_LANGUAGE:-ko}
     volumes:
       - ./docs:/app/docs:ro
       - ./GUIDE.md:/app/GUIDE.md:ro
