@@ -1,0 +1,16 @@
+# 베이스라인 — 모델이 기본 산술 능력 / 한국어 instruction 을 받았는가.
+# 이 케이스가 실패하면 라우팅/시스템 프롬프트 자체가 깨진 것.
+task: |
+  15 × 23 + 7 을 계산해서 숫자만 답해.
+tags:
+  - basic
+  - arithmetic
+expected_behaviors:
+  - 정확한 답 352 를 포함한다
+  - 한 줄 안에 답을 제시한다
+  - 불필요한 설명·계산 과정을 길게 늘어놓지 않는다
+judge_criteria: |
+  응답 어딘가에 "352" 가 있고, 응답 전체가 짧아야 한다(2줄 이내).
+max_turns: 2
+max_cost_usd: 0.03
+timeout_sec: 30

@@ -29,6 +29,11 @@ docker-compose.override.yaml
 # cooldown, future pricing snapshots). Per-deploy state — never commit.
 telegram-bridge/data/
 
+# Eval run artifacts — per-run trace/judge JSON. eval/baseline.json IS
+# committed (reference for CI regression — #116), but eval/runs/ is
+# per-run output that accumulates indefinitely.
+eval/runs/
+
 # AZ user-plugin overrides — _model_config/config.json holds the
 # chat/utility model selection (per-deploy state, may include API keys).
 # Mount target: /a0/usr/plugins (see docker-compose.yml). Allow .gitkeep

@@ -1,0 +1,21 @@
+# 우리 프로젝트의 PR 제목 컨벤션 — 한국어 + 70자 이내 + bracket 카테고리.
+# CLAUDE.md "PR 제목은 기존 repo 컨벤션, 설명부 한국어" 정책 검증.
+task: |
+  내가 `telegram-bridge/budget/engine.py` 에 일간 예산 알림 쿨다운을
+  60초로 단축하는 변경을 했어. PR 제목 후보를 3개 한국어로 제시해줘.
+  형식 예: `[bridge] xxx` 또는 `fix(budget): xxx`.
+tags:
+  - project_convention
+  - korean
+  - pr
+expected_behaviors:
+  - PR 제목 후보를 정확히 3개 제시한다
+  - 모든 후보가 한국어(설명부)로 작성되어 있다
+  - 각 후보가 70자 이내이다
+  - bracketed 카테고리 또는 conventional commit 접두사를 사용한다
+judge_criteria: |
+  3개여야 하고(2개나 4개면 fail), 영어로만 된 후보가 섞여있으면 fail.
+  70자 초과 후보가 하나라도 있으면 부분 감점.
+max_turns: 2
+max_cost_usd: 0.05
+timeout_sec: 45
