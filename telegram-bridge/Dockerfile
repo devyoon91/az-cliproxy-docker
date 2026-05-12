@@ -6,7 +6,9 @@ RUN pip install --no-cache-dir \
     python-telegram-bot==21.* \
     aiohttp==3.* \
     httpx \
-    openai
+    openai \
+    pyyaml==6.* \
+    anthropic==0.40.*
 
 COPY bot.py .
 COPY pricing/ ./pricing/
