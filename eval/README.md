@@ -121,6 +121,52 @@ git add eval/baseline.json && git commit -m "eval: record baseline (run <timesta
 목표 baseline 통과율: **≥ 70%** (Sonnet 4.6 기준). 미만이면 시스템 프롬프트나
 케이스 작성을 점검할 신호.
 
+또는 폰에서:
+
+```
+/eval baseline    # bridge 컨테이너 안의 baseline.json 갱신
+```
+
+bridge 가 마운트된 `./eval/baseline.json` 을 그대로 덮어쓰므로 그 후
+`git add eval/baseline.json && git commit` 로 PR 에 포함시키면 된다.
+
+## CI 회귀 자동 감지 (#116)
+
+[`.github/workflows/eval.yml`](../.github/workflows/eval.yml) 가 골든셋 회귀를
+자동으로 감지한다.
+
+| 트리거 | 동작 |
+|---|---|
+| `workflow_dispatch` (수동) | Actions 탭에서 \"Eval Regression\" 선택 후 Run. 임계값 입력 가능 |
+| `push` to `main` | `eval/**`, 워크플로우 자체, 또는 `agent-zero/prompts/**` 변경 시 머지 후 자동 실행 |
+| PR 라벨 `eval-required` | 해당 PR 에서만 실행, 결과를 PR 코멘트로 남김 |
+
+비교 결과:
+- 통과율이 `baseline.json` 대비 **임계값(기본 10pp) 이상 하락**하면 워크플로우 실패
+- `baseline.json` 이 없으면 \"no baseline\" 으로 처리 (실패 아님)
+- 통과/실패 여부 + 비용 변동 + 새로 실패한 케이스 목록을 job summary 와 (PR 인 경우) 코멘트로 출력
+
+### 필수 secret
+
+| 이름 | 용도 |
+|---|---|
+| `ANTHROPIC_API_KEY` | runner(메인 응답) + judge(채점) 모두 사용. CLIProxy 트랙은 CI 비호환 — Direct API 만 |
+
+Settings → Secrets and variables → Actions 에서 추가.
+
+### 비교 스크립트 단독 사용
+
+CI 외부에서도 두 회차 summary 를 비교할 수 있다 — 로컬 디버깅용:
+
+```bash
+python .github/scripts/eval_compare.py \
+  --run-dir eval/runs/20260512-093015 \
+  --baseline eval/baseline.json \
+  --threshold-pp 10 \
+  --output report.md
+echo "exit code: $?"   # 0=ok / no baseline, 1=regression, 2=error
+```
+
 ## 로드 검증
 
 ```python

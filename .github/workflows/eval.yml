@@ -1,0 +1,198 @@
+name: Eval Regression
+
+# 골든셋 회귀 자동 감지 워크플로우 (#116).
+#
+# 트리거:
+#   - workflow_dispatch: 수동 실행 (기본/안전 경로 — 첫 검증용)
+#   - push to main: 메인 머지 직후 회귀 감지
+#   - pull_request labeled 'eval-required': 일부 PR 에서 옵트인
+#
+# 필수 secret:
+#   ANTHROPIC_API_KEY  — runner(메인 응답) + judge(채점) 모두 Anthropic
+#                        API 키 사용.  CLIProxy 트랙은 CI 에 적합하지
+#                        않아 (OAuth 토큰 필요) Direct API 만 지원.
+#
+# 비용 추정:
+#   골든셋 10개 케이스 풀 실행 = ~$0.50 (Sonnet 4.6 + Haiku 4.5 채점).
+#   메인 머지마다 트리거되므로 머지 빈도 × $0.50 = 월간 비용.
+
+on:
+  workflow_dispatch:
+    inputs:
+      threshold_pp:
+        description: "통과율 회귀 임계값 (percentage points)"
+        default: "10"
+        required: true
+
+  push:
+    branches: [main]
+    # 워크플로우 자체 또는 평가 인프라 변경에만 트리거.  cases/ 변경은
+    # baseline 갱신을 동반해야 하므로 트리거 — 그 외 무관한 파일 푸시로
+    # 비용을 발생시키지 않게 path 필터.
+    paths:
+      - "eval/**"
+      - ".github/scripts/eval_compare.py"
+      - ".github/workflows/eval.yml"
+      - "agent-zero/prompts/**"
+      - "agent-zero/settings.example.json"
+
+  pull_request:
+    types: [labeled, synchronize, opened, reopened]
+
+jobs:
+  eval:
+    name: Run + Judge + Compare
+    # PR 트리거의 경우 'eval-required' 라벨이 있어야만 실행.
+    # 모든 PR 에 비용을 부담시키지 않기 위한 옵트인 게이트.
+    if: |
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'eval-required')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: write   # PR 코멘트용
+
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify ANTHROPIC_API_KEY secret
+        # Empty/unset secret 은 GitHub Actions 가 ANTHROPIC_API_KEY="" 로
+        # 평가해 buildArgs 단계 통과 후 런타임에 cryptic 401 로 떨어진다.
+        # 여기서 일찍 끊어서 \"왜 실패했지\" 디버깅 비용 절감.
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret 미설정. Settings → Secrets → Actions 에 추가하세요."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          # runner: pyyaml(schema), aiohttp(AZ HTTP).  judge: anthropic SDK.
+          # 버전은 telegram-bridge/Dockerfile (#114) 과 일치 — drift 시
+          # 두 파일 모두 업데이트.
+          pip install pyyaml==6.0.2 aiohttp==3.10.* anthropic==0.40.*
+
+      - name: Prepare AZ minimal config
+        # CI 에서는 Direct API 트랙(Anthropic) 만 사용 — CLIProxy 컨테이너는
+        # 띄우지 않는다.  AZ settings.example.json 이 이미 anthropic provider
+        # 기본값을 가지므로 그대로 복사.
+        run: |
+          mkdir -p agent-zero/logs/tasks agent-zero/work_dir agent-zero/memory
+          cp agent-zero/settings.example.json agent-zero/settings.json
+          cat > .env <<EOF
+          ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+          BRANCH=main
+          GIT_USER_NAME=ci
+          GIT_USER_EMAIL=ci@github.local
+          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          DASHBOARD_TOKEN=
+          EOF
+
+      - name: Boot Agent Zero (no cliproxy)
+        # `--no-deps` 로 cliproxy 의존성 skip.  `--build` 로 image 빌드 (3-5분
+        # 소요).  포트 50001 매핑이 docker-compose.yml 에 이미 있어서 host 에서
+        # localhost:50001 로 접근 가능.
+        run: |
+          docker compose up -d --no-deps --build agent-zero
+          # 헬스체크 — / 가 200 응답 (AZ UI) 할 때까지 최대 5분.
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null -m 3 http://localhost:50001/; then
+              echo "Agent Zero ready ($i*5s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Agent Zero 5분 안에 ready 안 됨"
+          docker compose logs agent-zero | tail -100
+          exit 1
+
+      - name: Run eval (all cases)
+        env:
+          AZ_API_URL: "http://localhost:50001"
+          EVAL_TASKS_DIR: ${{ github.workspace }}/agent-zero/logs/tasks
+          EVAL_LOG_LEVEL: INFO
+        run: |
+          python -m eval.runner --all
+          # 회차 디렉토리는 eval/runs/<timestamp>/ 형태 — 가장 최근 것을
+          # GITHUB_ENV 로 다음 step 에 전달.
+          RUN_DIR=$(ls -dt eval/runs/*/ | head -1)
+          echo "RUN_DIR=${RUN_DIR%/}" >> "$GITHUB_ENV"
+          echo "Run directory: ${RUN_DIR%/}"
+
+      - name: Judge run
+        run: |
+          python -m eval.judge --run-dir "$RUN_DIR" --cases-dir eval/cases
+
+      - name: Compare to baseline
+        id: compare
+        # exit 0 = OK / no baseline, 1 = regression, 2 = error.
+        # `continue-on-error` 로 step 자체는 항상 통과시키고, 다음 단계에서
+        # comparison-result 를 보고 최종 job 결과를 결정.
+        continue-on-error: true
+        run: |
+          THRESHOLD="${{ inputs.threshold_pp || '10' }}"
+          python .github/scripts/eval_compare.py \
+            --run-dir "$RUN_DIR" \
+            --baseline eval/baseline.json \
+            --threshold-pp "$THRESHOLD" \
+            --output eval-report.md
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Append to job summary
+        if: always()
+        run: |
+          if [ -f eval-report.md ]; then
+            cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-run-${{ github.run_id }}
+          path: |
+            eval/runs/
+            eval-report.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Comment on PR
+        # 라벨로 트리거된 PR 일 때만 코멘트.
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('eval-report.md')) return;
+            const body = fs.readFileSync('eval-report.md', 'utf8');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body,
+            });
+
+      - name: AZ logs on failure
+        if: failure()
+        run: docker compose logs agent-zero | tail -200
+
+      - name: Enforce regression gate
+        # compare step 의 exit code 가 1 (regression) 이면 워크플로우 실패.
+        # 0 (ok / no baseline) 이면 통과.
+        run: |
+          rc="${{ steps.compare.outputs.exit_code }}"
+          if [ "$rc" = "1" ]; then
+            echo "::error::Eval regression detected (pass-rate dropped beyond threshold)"
+            exit 1
+          fi
+          echo "Eval gate passed (rc=$rc)"
