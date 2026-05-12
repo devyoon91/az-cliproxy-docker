@@ -10,7 +10,13 @@ import logging
 
 from aiohttp import web
 from budget.engine import budget_check_all
-from dashboard import DASHBOARD_TOKEN, dashboard_handler, stats_api_handler
+from dashboard import (
+    DASHBOARD_TOKEN,
+    dashboard_handler,
+    eval_dashboard_handler,
+    eval_stats_api_handler,
+    stats_api_handler,
+)
 from notify.telegram import send_telegram
 from pricing.usage import track_usage, usage_history, usage_today
 from render import md_to_telegram_html
@@ -143,13 +149,20 @@ async def run_webhook_server() -> None:
     # is unset, so registering them is harmless when disabled.
     app.router.add_get("/api/stats", stats_api_handler)
     app.router.add_get("/dashboard", dashboard_handler)
+    # Eval dashboard (#115) — separate page with its own template. Same
+    # DASHBOARD_TOKEN auth, so the cost / eval pages share one credential.
+    app.router.add_get("/api/eval-stats", eval_stats_api_handler)
+    app.router.add_get("/dashboard/eval", eval_dashboard_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8443)
     await site.start()
     routes_msg = "/notify, /track, /usage"
     if DASHBOARD_TOKEN:
-        routes_msg += ", /dashboard, /api/stats (token-protected)"
+        routes_msg += (
+            ", /dashboard, /dashboard/eval, "
+            "/api/stats, /api/eval-stats (token-protected)"
+        )
     else:
         routes_msg += " (dashboard disabled — set DASHBOARD_TOKEN to enable)"
     logger.info(f"Webhook server started on :8443 ({routes_msg})")

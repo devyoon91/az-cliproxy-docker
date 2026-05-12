@@ -32,6 +32,7 @@ _OWN_MODULES = (
     "task_agg", "task_agg.agg",
     "budget", "budget.core", "budget.engine",
     "dashboard", "dashboard.auth", "dashboard.stats", "dashboard.handlers",
+    "dashboard.eval_stats", "dashboard.eval_handlers",
     "webhooks", "webhooks.handlers",
 )
 
@@ -157,6 +158,25 @@ def _load_webhooks_pkg(tmp_path):
     dash_pkg.DASHBOARD_TOKEN = auth_mod.DASHBOARD_TOKEN  # type: ignore[attr-defined]
     dash_pkg.dashboard_handler = dh_mod.dashboard_handler  # type: ignore[attr-defined]
     dash_pkg.stats_api_handler = dh_mod.stats_api_handler  # type: ignore[attr-defined]
+
+    # dashboard.eval_stats / eval_handlers (#115) — webhooks.handlers imports
+    # eval_dashboard_handler + eval_stats_api_handler from `dashboard`.
+    eval_stats_spec = importlib.util.spec_from_file_location(
+        "dashboard.eval_stats", _ROOT / "dashboard" / "eval_stats.py"
+    )
+    assert eval_stats_spec and eval_stats_spec.loader
+    eval_stats_mod = importlib.util.module_from_spec(eval_stats_spec)
+    sys.modules["dashboard.eval_stats"] = eval_stats_mod
+    eval_stats_spec.loader.exec_module(eval_stats_mod)
+    eval_handlers_spec = importlib.util.spec_from_file_location(
+        "dashboard.eval_handlers", _ROOT / "dashboard" / "eval_handlers.py"
+    )
+    assert eval_handlers_spec and eval_handlers_spec.loader
+    eh_mod = importlib.util.module_from_spec(eval_handlers_spec)
+    sys.modules["dashboard.eval_handlers"] = eh_mod
+    eval_handlers_spec.loader.exec_module(eh_mod)
+    dash_pkg.eval_dashboard_handler = eh_mod.eval_dashboard_handler  # type: ignore[attr-defined]
+    dash_pkg.eval_stats_api_handler = eh_mod.eval_stats_api_handler  # type: ignore[attr-defined]
 
     # webhooks.handlers
     wh_pkg = types.ModuleType("webhooks")
