@@ -897,6 +897,11 @@ def main():
     app.add_handler(CommandHandler("budget", cmd_budget))
     app.add_handler(CommandHandler("pricing", cmd_pricing))
     app.add_handler(CommandHandler("backup", cmd_backup))
+    # /eval — golden-set 실행 + LLM-as-judge 채점 (#114). 마운트된 eval/
+    # 가 없으면 핸들러가 친절한 에러로 거절.
+    from telegram_handlers.eval import cmd_eval  # noqa: E402
+
+    app.add_handler(CommandHandler("eval", cmd_eval))
     app.add_handler(CommandHandler("monitor_on", cmd_monitor_on))
     app.add_handler(CommandHandler("monitor_off", cmd_monitor_off))
     # Primary names (clearer about direction — both /monitor and /track_chat

@@ -98,6 +98,9 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - STT_MODEL=${STT_MODEL:-whisper-1}
       - STT_LANGUAGE=${STT_LANGUAGE:-ko}
+      # /eval judge — Anthropic Haiku 호출용. 미설정이면 /eval 이 친절한 에러
+      # 메시지로 거부 (#114).
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - ./docs:/app/docs:ro
       - ./GUIDE.md:/app/GUIDE.md:ro
@@ -106,6 +109,10 @@ services:
       - ./agent-zero/logs/tasks:/app/tasks:ro
       # M5-A: persist /budget settings + alert cooldown across restarts (issue #19)
       - ./telegram-bridge/data:/app/data
+      # /eval (#114): bridge가 eval 케이스를 읽고, runs/ 출력 + baseline.json
+      # 갱신을 디스크에 쓴다. rw 마운트 — `eval/runs/` 는 .gitignore 대상이고
+      # `eval/baseline.json` 은 사용자가 의도적으로 갱신할 때만 변경된다.
+      - ./eval:/app/eval
     ports:
       - "8443:8443"   # 알림 webhook (내부용)
     depends_on:
