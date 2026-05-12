@@ -54,6 +54,10 @@ class Trace:
     guard_violations: list[str] = field(default_factory=list)
     error: str | None = None
 
+    # judge (#112) 가 채우는 별도 비용 — runner 자체에서는 항상 0.
+    # 트레이스 단위 총비용은 `cost_usd + judge_cost_usd`.
+    judge_cost_usd: float = 0.0
+
     def to_dict(self) -> dict[str, Any]:
         """asdict 결과를 그대로 JSON 직렬화에 쓰기 위한 보조."""
         return asdict(self)
