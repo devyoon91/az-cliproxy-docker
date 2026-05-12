@@ -1,0 +1,23 @@
+# 의도적 off-by-one 버그가 포함된 함수를 리뷰 요청.
+# 모델이 (1) 버그 위치를 짚고 (2) 수정안을 내는지 확인.
+task: |
+  다음 Python 함수를 리뷰해줘. 동작상 문제가 있다면 구체적으로 알려줘.
+
+  ```python
+  def last_n_chars(s: str, n: int) -> str:
+      """Return the last n characters of s."""
+      return s[len(s) - n + 1:]
+  ```
+tags:
+  - code
+  - review
+expected_behaviors:
+  - off-by-one 버그가 있음을 명시한다
+  - 올바른 슬라이스(`s[-n:]` 또는 `s[len(s)-n:]`)를 제시한다
+  - n=0 또는 n>len(s) 같은 엣지 케이스 중 최소 한 개를 언급한다
+judge_criteria: |
+  슬라이싱 인덱스가 `len(s) - n + 1` 이라 한 글자가 잘려 나가는 버그를
+  정확히 짚어야 한다. 단순히 "버그가 있는 것 같다" 만으로는 fail.
+max_turns: 3
+max_cost_usd: 0.05
+timeout_sec: 60

@@ -1,0 +1,20 @@
+# 사용자가 표를 요청했을 때 실제 마크다운 표를 생성하는가.
+# Telegram bridge 의 markdown→HTML 변환이 표를 지원하므로 표 형식 준수는
+# 사용자 가독성에 직접 영향.
+task: |
+  Python 의 `list` 와 `tuple` 의 차이를 마크다운 표로 정리해줘.
+  컬럼은 "항목 / list / tuple" 3개로.
+tags:
+  - format
+  - markdown
+expected_behaviors:
+  - 마크다운 표 문법(`|` 와 `-` 구분선)을 사용한다
+  - '"항목", "list", "tuple" 3개 컬럼이 있다'
+  - 최소 3행 이상의 비교 내용이 있다
+  - 한국어로 작성되어 있다
+judge_criteria: |
+  실제 GitHub-flavored 마크다운 표여야 한다. 단순 글머리표나 평문
+  나열이면 fail. 3컬럼 헤더가 명시적이어야 한다.
+max_turns: 2
+max_cost_usd: 0.05
+timeout_sec: 45

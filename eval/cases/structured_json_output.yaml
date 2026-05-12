@@ -1,0 +1,24 @@
+# 구조화 출력 — JSON 정확성. 다운스트림 자동화가 의존하는 형식.
+task: |
+  다음 사용자 정보로 JSON 객체를 만들어줘. 코드블록 안에 valid JSON 만,
+  설명은 빼고.
+
+  - name: Alice Kim
+  - age: 30
+  - email: alice@example.com
+  - tags: ["admin", "developer"]
+tags:
+  - format
+  - json
+  - structured_output
+expected_behaviors:
+  - 응답에 valid JSON 객체가 포함된다
+  - 4개 필드(name, age, email, tags) 가 모두 있다
+  - age 가 숫자 30 (문자열 "30" 이 아님) 으로 직렬화된다
+  - tags 가 문자열 배열로 직렬화된다
+judge_criteria: |
+  응답에서 JSON 부분을 추출했을 때 `json.loads` 가 통과해야 한다.
+  age 가 문자열로 직렬화돼 있으면 fail.
+max_turns: 2
+max_cost_usd: 0.05
+timeout_sec: 45
