@@ -28,7 +28,8 @@ jobs:
           python -m pip install --upgrade pip
           # Pin minor versions to keep CI deterministic. Tests use stubs, so
           # we don't need the full agent-zero / weasyprint runtime here.
-          pip install ruff==0.7.4 pytest==8.3.4
+          # pyyaml: eval/schema.py loads case YAML — stdlib-only otherwise.
+          pip install ruff==0.7.4 pytest==8.3.4 pyyaml==6.0.2
 
       - name: ruff check
         run: ruff check .
