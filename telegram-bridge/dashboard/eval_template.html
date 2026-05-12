@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>AZ Eval Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0; padding: 1.5rem;
+      background: #0f1115; color: #e8e8ec;
+    }
+    .header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 1rem; flex-wrap: wrap; margin-bottom: .5rem;
+    }
+    h1 { margin: 0 0 .25rem 0; font-size: 1.4rem; }
+    .toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    .toolbar select, .toolbar button, .toolbar a {
+      background: #1c1f27; color: #e8e8ec; border: 1px solid #2c313c;
+      border-radius: 6px; padding: .35rem .65rem; font-size: .85rem;
+      cursor: pointer; font-family: inherit; text-decoration: none;
+    }
+    .toolbar select:hover, .toolbar button:hover, .toolbar a:hover { border-color: #3a4150; }
+    .toolbar .label { font-size: .75rem; color: #9aa0aa; margin-right: .25rem; }
+    .sub {
+      color: #9aa0aa; font-size: .8rem; margin-bottom: 1.25rem;
+      display: flex; gap: 1rem; flex-wrap: wrap;
+    }
+    .grid { display: grid; gap: 1rem; grid-template-columns: 1fr; }
+    @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } .span-2 { grid-column: span 2; } }
+    .card {
+      background: #181b22; border: 1px solid #262a33; border-radius: 10px;
+      padding: 1rem; min-height: 240px;
+    }
+    .card h2 { margin: 0 0 .75rem 0; font-size: .95rem; color: #c8ccd6; font-weight: 500; }
+    .totals { display: grid; gap: .5rem .75rem; grid-template-columns: 1fr 1fr; font-size: .85rem; }
+    .totals .v { color: #8cc; font-variant-numeric: tabular-nums; }
+    .err { color: #f88; padding: .5rem 1rem; }
+    canvas { max-height: 280px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>🧪 AZ Eval Dashboard</h1>
+      <div class="sub">
+        <span id="updated"></span>
+        <span id="run-count"></span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <a id="cost-link" href="/dashboard">← 비용 대시보드</a>
+      <span class="label">범위</span>
+      <select id="range">
+        <option value="7d">7일</option>
+        <option value="30d" selected>30일</option>
+        <option value="90d">90일</option>
+      </select>
+      <button id="refresh">🔄</button>
+    </div>
+  </div>
+
+  <div id="err" class="err" style="display:none"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>📌 최신 회차</h2>
+      <div id="latest" class="totals">로딩...</div>
+    </div>
+    <div class="card">
+      <h2>📈 통과율 추이</h2>
+      <canvas id="passRate"></canvas>
+    </div>
+    <div class="card span-2">
+      <h2>💰 케이스별 평균 비용 (실행 + 채점)</h2>
+      <canvas id="perCaseCost"></canvas>
+    </div>
+    <div class="card span-2">
+      <h2>⏱ 케이스별 지연 분포 (p50 / p95 / max)</h2>
+      <canvas id="duration"></canvas>
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const charts = {};
+const params = new URLSearchParams(location.search);
+const token = params.get('token') || '';
+
+// 비용 대시보드 링크에 같은 token 을 붙여 클릭 한 번에 이동.
+const costLink = $('cost-link');
+if (token) costLink.href = '/dashboard?token=' + encodeURIComponent(token);
+
+async function fetchStats() {
+  const range = $('range').value || '30d';
+  const qs = new URLSearchParams({ range });
+  if (token) qs.set('token', token);
+  const resp = await fetch('/api/eval-stats?' + qs.toString());
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      throw new Error('401: ?token=... 파라미터를 붙여 다시 접속하세요.');
+    }
+    throw new Error('HTTP ' + resp.status);
+  }
+  return resp.json();
+}
+
+function fmtDateShort(iso) {
+  if (!iso) return '?';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('ko-KR', {
+      month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    });
+  } catch (e) { return iso; }
+}
+
+function renderLatest(latest) {
+  const box = $('latest');
+  if (!latest) {
+    box.innerHTML = '<span style="grid-column:1/-1;color:#9aa0aa">eval 회차 데이터 없음. <code>/eval</code> 명령으로 첫 회차를 만드세요.</span>';
+    return;
+  }
+  const total = latest.total || 0;
+  const passed = latest.passed_judges || 0;
+  const rate = total ? (passed / total * 100).toFixed(0) : 0;
+  const runCost = (latest.total_run_cost_usd || 0).toFixed(4);
+  const judgeCost = (latest.total_judge_cost_usd || 0).toFixed(4);
+  const elapsed = (latest.elapsed_sec || 0).toFixed(1);
+  box.innerHTML = `
+    <div>실행 시각</div><div class="v">${fmtDateShort(latest.started_at)}</div>
+    <div>통과율</div><div class="v">${passed}/${total} (${rate}%)</div>
+    <div>실행 비용</div><div class="v">$${runCost}</div>
+    <div>채점 비용</div><div class="v">$${judgeCost}</div>
+    <div>소요</div><div class="v">${elapsed}s</div>
+    <div>가드 위반</div><div class="v">${latest.guard_violations || 0}</div>
+  `;
+}
+
+function makeOrUpdate(name, canvasId, config) {
+  if (charts[name]) {
+    charts[name].data = config.data;
+    charts[name].options = config.options;
+    charts[name].update();
+  } else {
+    const ctx = $(canvasId).getContext('2d');
+    charts[name] = new Chart(ctx, config);
+  }
+}
+
+function renderPassRate(trend) {
+  makeOrUpdate('passRate', 'passRate', {
+    type: 'line',
+    data: {
+      labels: trend.map(r => fmtDateShort(r.started_at)),
+      datasets: [{
+        label: '통과율 (%)',
+        data: trend.map(r => (r.pass_rate * 100).toFixed(0)),
+        borderColor: '#8cc',
+        backgroundColor: 'rgba(136,204,204,0.15)',
+        tension: 0.2, fill: true,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { y: { min: 0, max: 100, ticks: { color: '#9aa0aa' } }, x: { ticks: { color: '#9aa0aa' } } },
+      plugins: { legend: { labels: { color: '#c8ccd6' } } },
+    }
+  });
+}
+
+function renderPerCaseCost(rows) {
+  makeOrUpdate('perCaseCost', 'perCaseCost', {
+    type: 'bar',
+    data: {
+      labels: rows.map(r => r.case_id),
+      datasets: [
+        { label: '실행 평균 ($)', data: rows.map(r => r.avg_run_cost_usd),
+          backgroundColor: '#5dade2' },
+        { label: '채점 평균 ($)', data: rows.map(r => r.avg_judge_cost_usd),
+          backgroundColor: '#f5b041' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { stacked: true, ticks: { color: '#9aa0aa' } }, y: { stacked: true, ticks: { color: '#9aa0aa' } } },
+      plugins: { legend: { labels: { color: '#c8ccd6' } } },
+    }
+  });
+}
+
+function renderDuration(rows) {
+  makeOrUpdate('duration', 'duration', {
+    type: 'bar',
+    data: {
+      labels: rows.map(r => r.case_id),
+      datasets: [
+        { label: 'p50 (s)', data: rows.map(r => (r.p50_ms / 1000).toFixed(2)),
+          backgroundColor: '#7dcea0' },
+        { label: 'p95 (s)', data: rows.map(r => (r.p95_ms / 1000).toFixed(2)),
+          backgroundColor: '#f1948a' },
+        { label: 'max (s)', data: rows.map(r => (r.max_ms / 1000).toFixed(2)),
+          backgroundColor: '#bb8fce' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { ticks: { color: '#9aa0aa' } }, y: { ticks: { color: '#9aa0aa' } } },
+      plugins: { legend: { labels: { color: '#c8ccd6' } } },
+    }
+  });
+}
+
+async function reload() {
+  $('err').style.display = 'none';
+  try {
+    const stats = await fetchStats();
+    $('updated').textContent = '갱신 ' + fmtDateShort(stats.now);
+    $('run-count').textContent = '회차 ' + (stats.total_runs || 0) + '건';
+    renderLatest(stats.latest);
+    renderPassRate(stats.pass_rate_trend || []);
+    renderPerCaseCost(stats.per_case_avg || []);
+    renderDuration(stats.duration_distribution || []);
+  } catch (e) {
+    $('err').textContent = String(e);
+    $('err').style.display = 'block';
+  }
+}
+
+$('range').addEventListener('change', reload);
+$('refresh').addEventListener('click', reload);
+reload();
+</script>
+</body>
+</html>

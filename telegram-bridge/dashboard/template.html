@@ -20,12 +20,12 @@
     .toolbar {
       display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
     }
-    .toolbar select, .toolbar button {
+    .toolbar select, .toolbar button, .toolbar a {
       background: #1c1f27; color: #e8e8ec; border: 1px solid #2c313c;
       border-radius: 6px; padding: .35rem .65rem; font-size: .85rem;
-      cursor: pointer; font-family: inherit;
+      cursor: pointer; font-family: inherit; text-decoration: none;
     }
-    .toolbar select:hover, .toolbar button:hover { border-color: #3a4150; }
+    .toolbar select:hover, .toolbar button:hover, .toolbar a:hover { border-color: #3a4150; }
     .toolbar .label { font-size: .75rem; color: #9aa0aa; margin-right: .25rem; }
     .toolbar button.refresh { padding: .35rem .55rem; }
     .toolbar button.refresh.spinning span { animation: spin 1s linear infinite; display: inline-block; }
@@ -57,6 +57,7 @@
       <h1>📊 AZ Cost Dashboard</h1>
     </div>
     <div class="toolbar">
+      <a id="eval-link" href="/dashboard/eval">🧪 eval →</a>
       <span class="label">기간</span>
       <select id="range">
         <option value="1d">1d</option>
@@ -103,6 +104,12 @@
     errEl.hidden = false;
     errEl.textContent = "⚠️ ?token=... 쿼리 파라미터를 붙여 다시 접속하세요.";
     return;
+  }
+
+  // /dashboard/eval 링크에 같은 토큰을 propagate — 클릭 한 번에 이동.
+  const evalLink = document.getElementById("eval-link");
+  if (evalLink) {
+    evalLink.href = "/dashboard/eval?token=" + encodeURIComponent(token);
   }
 
   // ── Settings (range, auto-refresh) — persisted to localStorage so the

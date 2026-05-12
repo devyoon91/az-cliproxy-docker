@@ -16,14 +16,24 @@ which now live in task_agg.agg. See PR #89 for the dependency note.
 """
 
 from .auth import DASHBOARD_TOKEN, _check_dashboard_auth
+from .eval_handlers import (
+    EVAL_DASHBOARD_HTML,
+    eval_dashboard_handler,
+    eval_stats_api_handler,
+)
+from .eval_stats import _build_eval_stats
 from .handlers import DASHBOARD_HTML, dashboard_handler, stats_api_handler
 from .stats import _build_stats
 
 __all__ = [
     "DASHBOARD_TOKEN",
     "DASHBOARD_HTML",
+    "EVAL_DASHBOARD_HTML",
     "_check_dashboard_auth",
     "_build_stats",
+    "_build_eval_stats",
     "dashboard_handler",
     "stats_api_handler",
+    "eval_dashboard_handler",
+    "eval_stats_api_handler",
 ]
