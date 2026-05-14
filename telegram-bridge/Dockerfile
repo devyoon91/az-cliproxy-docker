@@ -3,12 +3,12 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
-    python-telegram-bot==21.* \
-    aiohttp==3.* \
-    httpx \
-    openai \
-    pyyaml==6.* \
-    anthropic==0.40.*
+    python-telegram-bot==21.11.1 \
+    aiohttp==3.13.5 \
+    httpx==0.28.1 \
+    openai==2.36.0 \
+    pyyaml==6.0.3 \
+    anthropic==0.40.0
 
 COPY bot.py .
 COPY pricing/ ./pricing/
