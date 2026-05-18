@@ -48,7 +48,7 @@ Agent Zero (Docker 컨테이너)
 | `/verbose_on` | 진행 중 AZ 활동 로그도 보기 (도구/코드/info 등 streaming, 디버그용) |
 | `/verbose_off` | 진행 중엔 조용, 완료 시 답변+메트릭만 (기본) |
 
-> `/follow_on /follow_off` 는 `/track_chat_on /track_chat_off` 의 레거시 별명으로 그대로 동작 (PR #36).
+> `/follow_on /follow_off` 는 `/track_chat_on /track_chat_off` 의 레거시 별명으로 그대로 동작합니다.
 
 ### 상태/비용 (실시간)
 
@@ -168,7 +168,7 @@ Telegram에서 `/chats` 입력 시:
 
 `/track_chat_off` 하면 현재 채팅만 고정 추적하여 웹에서 다른 채팅을 열어도 Telegram 알림은 고정된 채팅의 것만 옵니다.
 
-> 레거시 별명 `/follow_on /follow_off` 도 그대로 동작합니다 (PR #36 호환).
+> 레거시 별명 `/follow_on /follow_off` 도 그대로 동작합니다.
 
 ---
 

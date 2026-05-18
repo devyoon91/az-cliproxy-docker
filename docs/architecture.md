@@ -1,5 +1,8 @@
 # Agent Zero 아키텍처
 
+Agent Zero 의 시스템 구조 · 런타임 · 핵심 컴포넌트 정리. 확장점 (플러그인 / 도구 /
+스킬 / 프로필) 을 만지기 전에 어디가 어디인지 잡아두는 용도.
+
 > 원본: [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) (MIT License)
 
 ---

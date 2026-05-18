@@ -34,7 +34,7 @@ eval/
 └── README.md
 ```
 
-## 기본 골든셋 10개 (#113)
+## 기본 골든셋 10개
 
 | id | 카테고리 | 검증 항목 |
 |---|---|---|
@@ -102,8 +102,7 @@ python -m eval.judge --run-dir eval/runs/<timestamp> --pass-threshold 0.8
 
 ## baseline 기록 (수동)
 
-CI 회귀 비교 ([#116](https://github.com/devyoon91/az-cliproxy-docker/issues/116)) 의 기준이 될
-baseline 은 한 번 사람이 실행해 기록한다 — Anthropic API 비용 발생.
+CI 회귀 비교의 기준이 될 baseline 은 한 번 사람이 실행해 기록한다 — Anthropic API 비용 발생.
 
 ```bash
 # 1) 전체 실행
@@ -130,7 +129,7 @@ git add eval/baseline.json && git commit -m "eval: record baseline (run <timesta
 bridge 가 마운트된 `./eval/baseline.json` 을 그대로 덮어쓰므로 그 후
 `git add eval/baseline.json && git commit` 로 PR 에 포함시키면 된다.
 
-## CI 회귀 자동 감지 (#116)
+## CI 회귀 자동 감지
 
 [`.github/workflows/eval.yml`](../.github/workflows/eval.yml) 가 골든셋 회귀를
 자동으로 감지한다.

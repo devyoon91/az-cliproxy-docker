@@ -177,11 +177,11 @@ curl http://localhost:8317/v1/models   # API 동작 확인
 | CLIProxy | 8317 | OpenAI-compatible API |
 | CLIProxy | 8085 | Management UI |
 | CLIProxy | 54545 | OAuth callback |
-| Telegram Bridge | 8443 | 알림/추적 Webhook · /dashboard (선택, 텔레그램 토큰 없이도 단독 사용 가능 — issue #106) |
+| Telegram Bridge | 8443 | 알림/추적 Webhook · /dashboard (선택, 텔레그램 토큰 없이도 단독 사용 가능) |
 
 ### Web Dashboard (선택)
 
-`telegram-bridge` 의 8443 포트에서 비용/사용량 차트 페이지를 제공합니다 (issue #23, M5-E).
+`telegram-bridge` 의 8443 포트에서 비용/사용량 차트 페이지를 제공합니다.
 
 **활성화**: `.env` 에 `DASHBOARD_TOKEN=...` 추가 후 컨테이너 재기동.
 빈 값/미설정 시 `/dashboard` 와 `/api/stats` 는 404 로 차단됩니다.
