@@ -1,4 +1,8 @@
 # Agent Zero 사용 가이드
+
+웹 UI 의 액션 버튼 · 파일 첨부 · 도구 호출 · 플러그인 · 스킬 · 프롬프트 작성
+요령을 한 문서에 모아둔 사용자 시점 레퍼런스.
+
 > 원본: [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) (MIT License)
 
 ---

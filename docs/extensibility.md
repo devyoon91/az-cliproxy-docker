@@ -1,5 +1,9 @@
 # Agent Zero 확장 가이드
 
+Agent Zero 를 확장하는 7가지 방식 (플러그인 · Extensions · Tools · Instruments ·
+Skills · Agent Profiles · MCP) 을 복잡도 순으로 정리. 새 기능을 어디에 얹어야
+하는지 결정할 때의 출발점.
+
 > 원본: [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) (MIT License)
 
 ---

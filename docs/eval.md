@@ -45,11 +45,11 @@ eval/
 
 .github/
 ├── scripts/eval_compare.py    # baseline 비교 스크립트
-└── workflows/eval.yml          # CI 회귀 워크플로우 (#116)
+└── workflows/eval.yml          # CI 회귀 워크플로우
 
 telegram-bridge/
-├── telegram_handlers/eval.py   # /eval 명령 (#114)
-└── dashboard/eval_*            # /dashboard/eval 페이지 (#115)
+├── telegram_handlers/eval.py   # /eval 명령
+└── dashboard/eval_*            # /dashboard/eval 페이지
 ```
 
 ---
@@ -185,8 +185,7 @@ python -m eval.judge --run-dir "$RUN_DIR"
 
 ## 5. Telegram `/eval`
 
-폰에서 [#114](https://github.com/devyoon91/az-cliproxy-docker/issues/114) 에서
-추가된 명령으로 한 번에 실행.
+폰에서 한 번에 실행.
 
 ```
 /eval                  골든셋 전체 + 채점
@@ -198,7 +197,7 @@ python -m eval.judge --run-dir "$RUN_DIR"
 종료 후 통과율 / 비용 / 케이스별 결과가 한 메시지로 정리된다.
 
 **전제**:
-- `docker-compose.yml` 에 `./eval:/app/eval` 마운트가 있어야 함 (PR [#122](https://github.com/devyoon91/az-cliproxy-docker/pull/122) 이후 기본 포함).
+- `docker-compose.yml` 에 `./eval:/app/eval` 마운트가 있어야 함 (기본 포함).
 - `.env` 에 `ANTHROPIC_API_KEY` 설정.
 
 ---
@@ -348,18 +347,3 @@ baseline 갱신과 함께 별도 PR 로 가는 게 정석 (\"eval: record baseli
 | **`_` 프리픽스 파일은 runner 에서 제외** | 템플릿 (`_example.yaml`) / 드래프트 안전 보관 |
 | **\"no baseline\" 은 exit 0** | fresh repo 가 CI 영구 실패 안 함 |
 | **path-filtered main-push + 라벨 옵트인 PR** | 1회 \$0.50 비용을 \"매 PR\" 로 곱하지 않음 |
-
----
-
-## 10. 관련 이슈/PR
-
-| # | 내용 |
-|---|---|
-| [#110](https://github.com/devyoon91/az-cliproxy-docker/issues/110) | `eval/` 부트스트랩 — 케이스 YAML 스키마 |
-| [#111](https://github.com/devyoon91/az-cliproxy-docker/issues/111) | runner — 케이스 실행 + 트레이스 캡처 |
-| [#112](https://github.com/devyoon91/az-cliproxy-docker/issues/112) | judge — LLM-as-judge 채점 |
-| [#113](https://github.com/devyoon91/az-cliproxy-docker/issues/113) | 기본 골든셋 10개 |
-| [#114](https://github.com/devyoon91/az-cliproxy-docker/issues/114) | `/eval` Telegram 명령 |
-| [#115](https://github.com/devyoon91/az-cliproxy-docker/issues/115) | `/dashboard/eval` 페이지 |
-| [#116](https://github.com/devyoon91/az-cliproxy-docker/issues/116) | CI 회귀 워크플로우 |
-| [#117](https://github.com/devyoon91/az-cliproxy-docker/issues/117) | 이 가이드 |
