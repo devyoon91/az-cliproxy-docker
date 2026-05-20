@@ -1,14 +1,19 @@
 # Agent Zero + CLIProxy Docker Setup
 
 Agent Zero AI 에이전트를 Docker Compose 로 구동하는 환경입니다. LLM 연동은 두 트랙을
-모두 지원합니다 — **Track A (Direct API)** 는 LiteLLM 으로 Anthropic/OpenAI 등 표준
+지원합니다 — **Track A (Direct API)** 는 LiteLLM 으로 Anthropic/OpenAI 등 표준
 API 에 직접 연결하는 경로, **Track B (CLIProxy)** 는 공식 CLI 의 OAuth 토큰을
-재활용해 구독 한도를 활용하는 경로입니다. 두 트랙을 동시에 구성해 모델별로 분리
-라우팅할 수도 있습니다.
+재활용해 구독 한도를 활용하는 경로입니다.
 
-> **참고 (2026)**: 일부 벤더가 비공식 클라이언트의 CLI OAuth 우회를 정책상 점진적으로
-> 제한하는 추세입니다. 운영/안정성 우선이면 Track A, 구독 한도 활용 또는 실험 환경이면
-> Track B 를 권장합니다. 자세한 비교는 아래 [LLM 연결 방식](#llm-연결-방식--두-트랙) 섹션 참조.
+> **⚠️ 중요 (2026-05 기준)**: Anthropic 이 2026-02-20 약관 개정으로 Claude
+> Free/Pro/Max OAuth 토큰의 third-party 도구 사용을 명시적으로 금지했고,
+> 2026-04-04 자로 서버측 차단이 완전 enforcement 되었습니다. 추가로 2026-06-15
+> 부터 구독 플랜의 programmatic 사용분이 별도 credit pool (Pro $20 / Max5× $100
+> / Max20× $200) 로 분리되어 full API 가격으로 과금됩니다. 따라서 **Track B 는
+> Claude 모델 대상으로는 더 이상 사용 불가**이며 (약관 위반 + 서버 차단), 이
+> 저장소는 **Track A (Direct API) 를 기본 권장 경로** 로 운영합니다. CLIProxy 의
+> 다른 벤더 (OpenAI Codex, Google Gemini, Qwen) 경로는 아직 동작하지만 동일한
+> 정책 흐름을 따라갈 가능성이 높으니 참고용으로만 두세요.
 
 ## Spec
 
@@ -37,7 +42,7 @@ API 에 직접 연결하는 경로, **Track B (CLIProxy)** 는 공식 CLI 의 OA
 └──────────────┘  │  (LiteLLM)   │  │    :8317     │
                   └──────┬───────┘  └──────┬───────┘
                          │ API 키          │ CLI OAuth
-                         │ (HTTPS)         │ (정책 변동 영향)
+                         │ (HTTPS)         │ (Claude 차단됨)
                          ▼                 ▼
                  ┌──────────────────────────────┐
                  │  LLM Provider                │
@@ -47,24 +52,24 @@ API 에 직접 연결하는 경로, **Track B (CLIProxy)** 는 공식 CLI 의 OA
 
 | 구성 | 설명 |
 |------|------|
-| **Agent Zero** | AI 에이전트 프레임워크 (LiteLLM 기반, 20+ LLM 지원). 두 트랙 동시 구성 가능 |
-| **Track A — Direct API** | LiteLLM 이 표준 LLM API 에 직접 연결 (API 키 인증). 정책 영향 없음 |
-| **Track B — CLIProxy** | 공식 CLI 의 OAuth 토큰을 OpenAI 호환 API 로 노출. 구독 한도 활용 |
+| **Agent Zero** | AI 에이전트 프레임워크 (LiteLLM 기반, 20+ LLM 지원) |
+| **Track A — Direct API ★ 권장** | LiteLLM 이 표준 LLM API 에 직접 연결 (API 키 인증). 정책 영향 없음 |
+| **Track B — CLIProxy (Claude 차단됨)** | 공식 CLI 의 OAuth 토큰을 OpenAI 호환 API 로 노출. Anthropic 은 2026-04-04 자로 차단 + 약관 위반, OpenAI/Google/Qwen 경로만 잔존 |
 | **Telegram Bridge** | 폰에서 Agent Zero 양방향 제어 (알림 + 지시 + 사용량 추적) |
 
 ### LLM 연결 방식 — 두 트랙
 
-| | Track A — Direct API | Track B — CLIProxy |
+| | Track A — Direct API ★ 권장 | Track B — CLIProxy |
 |---|---|---|
-| **인증** | API 키 (Anthropic Console / OpenAI 등) | 공식 CLI OAuth 토큰 (Claude Code, Codex 등) |
+| **인증** | API 키 (Anthropic Console / OpenAI 등) | 공식 CLI OAuth 토큰 (Codex / Gemini / Qwen — Claude 는 차단됨) |
 | **셋업** | API 키 1개로 즉시 시작 | CLIProxy 컨테이너 + CLI 로그인 단계 필요 |
-| **비용 모델** | 종량제 (요청당 과금) | 구독 한도 내 사용 (Pro / Max 등) |
-| **안정성** | 표준 경로, 정책 영향 없음 | 벤더가 OAuth 우회 경로를 점진적으로 제한하는 추세 (2026 기준) |
-| **추천 용도** | 운영, 비용 가시성 우선, 외부 사용자 배포 | 개인 개발/실험, 구독 한도 활용 |
+| **비용 모델** | 종량제 (요청당 과금) | 구독 한도 내 사용 (Pro / Max 등) — Anthropic 한정 06-15 부터 별도 credit pool 분리 |
+| **상태 (2026-05)** | 표준 경로, 정책 영향 없음 | **Anthropic 차단 완료** (2026-04-04). 타 벤더는 동작하지만 동일 흐름 가능성 |
+| **추천 용도** | 운영, 비용 가시성, Claude 사용 | Codex/Gemini/Qwen 구독 한도 활용이 필요한 실험 환경 |
 
-두 트랙은 상호 배타적이지 않습니다. Agent Zero `settings.json` 에서 chat-model 과
-util-model 의 base URL 을 각각 다르게 지정해 모델별로 트랙을 섞어 쓸 수 있습니다
-(예: chat 은 Track B 로 한도 활용, util 은 Track A 로 안정성 확보).
+두 트랙은 상호 배타적이지 않으므로 `settings.json` 에서 chat-model 과 util-model
+의 base URL 을 다르게 지정해 모델별로 섞을 수 있지만, Claude 호출은 반드시
+Track A 로 보내야 합니다.
 
 ### 로컬 커스텀 마운트 (`docker-compose.override.yml`)
 
