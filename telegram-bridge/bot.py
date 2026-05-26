@@ -129,6 +129,7 @@ from pricing.cost import (
     calc_cost,
 )
 from pricing.usage import (
+    build_daily_report_lines,
     track_usage,
     usage_history,
     usage_today,
@@ -785,7 +786,13 @@ from webhooks.handlers import (  # noqa: E402, F401
 
 # ── 일일 사용량 리포트 스케줄러 ──
 async def daily_usage_reporter():
-    """매일 자정에 일일 사용량 리포트를 Telegram으로 전송"""
+    """매일 KST 00:01 에 어제 사용량 리포트를 Telegram 으로 전송.
+
+    `usage_today` 가 \"어제 일자\" 데이터를 들고 있을 때만 발송한다.
+    `/track` 이벤트만 bucket 을 회전시키므로 idle 인 날에는 stale 한
+    이전 활성일 데이터가 남아있는데, 이걸 매일 같은 라벨로 반복 발송하지
+    않도록 발송 단계에서 일자 매칭 가드를 둔다 (issue #131).
+    """
     logger.info("Daily usage reporter started")
 
     while True:
@@ -798,25 +805,10 @@ async def daily_usage_reporter():
             wait_seconds += 86400
         await asyncio.sleep(wait_seconds)
 
-        # 어제 사용량 리포트
-        if usage_today["requests"] > 0:
-            lines = [
-                f"📊 일일 사용량 리포트 ({usage_today['date']})\n",
-                f"총 요청: {usage_today['requests']}건",
-                f"총 입력: {usage_today['input_tokens']:,} 토큰",
-                f"총 출력: {usage_today['output_tokens']:,} 토큰",
-                f"총 비용: ${usage_today['cost_usd']:.4f}",
-            ]
-            by_model = usage_today.get("by_model", {})
-            if by_model:
-                lines.append("\n🤖 모델별 내역:")
-                for model, stats in sorted(by_model.items(), key=lambda x: x[1]["cost_usd"], reverse=True):
-                    lines.append(
-                        f"  {model}\n"
-                        f"    {stats['requests']}건 | "
-                        f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,} | "
-                        f"${stats['cost_usd']:.4f}"
-                    )
+        # KST 기준 어제 일자 — usage_today.date 와 일치할 때만 발송
+        yesterday_str = (_kst_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        lines = build_daily_report_lines(usage_today, yesterday_str)
+        if lines:
             await send_telegram("\n".join(lines))
 
 
