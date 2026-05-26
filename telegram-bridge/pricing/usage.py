@@ -78,6 +78,47 @@ def _rotate_if_new_day(today_str: str) -> None:
     usage_today.update(_empty_today_bucket(today_str))
 
 
+def build_daily_report_lines(today_bucket: dict, yesterday_str: str) -> list[str] | None:
+    """Render the lines for the daily usage report — yesterday's totals only.
+
+    Returns None if there is nothing to send:
+    - `today_bucket["date"]` does not match `yesterday_str` (stale bucket
+      from an earlier active day — idle days must stay silent so the
+      reporter doesn't re-send the same numbers night after night), or
+    - `today_bucket["requests"] <= 0` (the bucket is for yesterday but
+      nothing was logged).
+
+    Caller passes `yesterday_str` because the time source belongs to the
+    reporter — keeping this helper a pure function is what makes it
+    testable without async / scheduler machinery. See issue #131.
+    """
+    if today_bucket["date"] != yesterday_str:
+        return None
+    if today_bucket["requests"] <= 0:
+        return None
+
+    lines = [
+        f"📊 일일 사용량 리포트 ({today_bucket['date']})\n",
+        f"총 요청: {today_bucket['requests']}건",
+        f"총 입력: {today_bucket['input_tokens']:,} 토큰",
+        f"총 출력: {today_bucket['output_tokens']:,} 토큰",
+        f"총 비용: ${today_bucket['cost_usd']:.4f}",
+    ]
+    by_model = today_bucket.get("by_model", {})
+    if by_model:
+        lines.append("\n🤖 모델별 내역:")
+        for model, stats in sorted(
+            by_model.items(), key=lambda x: x[1]["cost_usd"], reverse=True
+        ):
+            lines.append(
+                f"  {model}\n"
+                f"    {stats['requests']}건 | "
+                f"in:{stats['input_tokens']:,} out:{stats['output_tokens']:,} | "
+                f"${stats['cost_usd']:.4f}"
+            )
+    return lines
+
+
 def track_usage(
     model: str,
     input_tokens: int,

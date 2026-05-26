@@ -193,3 +193,50 @@ def test_bindings_survive_rollover(usage, monkeypatch):
     assert captured is usage.usage_today
     assert captured["date"] == "2026-05-09"
     assert captured["requests"] == 1
+
+
+# ── build_daily_report_lines (issue #131) ──────────────────────────
+
+
+def test_daily_report_sends_when_bucket_matches_yesterday(usage):
+    """Happy path — usage_today.date == yesterday and requests > 0 → lines."""
+    usage.track_usage("claude-fake", 1_000, 100)
+    # The fixture pins today to 2026-05-08; on 5/09 00:01 the report
+    # should label 5/08 as yesterday and emit lines.
+    lines = usage.build_daily_report_lines(usage.usage_today, "2026-05-08")
+    assert lines is not None
+    assert any("2026-05-08" in line for line in lines)
+    assert any("총 요청: 1건" in line for line in lines)
+    assert any("claude-fake" in line for line in lines)
+
+
+def test_daily_report_skips_when_bucket_is_stale(usage):
+    """Regression for issue #131 — if usage_today is from a day earlier
+    than 'yesterday' (idle days in between), the reporter must NOT send
+    that stale data repeatedly.
+    """
+    usage.track_usage("claude-fake", 1_000, 100)  # date == 2026-05-08
+    # Two idle days have passed; reporter fires on 5/11 → yesterday is 5/10.
+    lines = usage.build_daily_report_lines(usage.usage_today, "2026-05-10")
+    assert lines is None
+
+
+def test_daily_report_skips_when_no_requests(usage):
+    """Bucket is for yesterday but logged zero requests → silent."""
+    # Manually set the bucket to yesterday's date with no activity.
+    usage.usage_today.clear()
+    usage.usage_today.update(usage._empty_today_bucket("2026-05-08"))
+    lines = usage.build_daily_report_lines(usage.usage_today, "2026-05-08")
+    assert lines is None
+
+
+def test_daily_report_includes_by_model_breakdown(usage):
+    """Lines should carry the by_model section sorted by cost desc."""
+    usage.track_usage("claude-fake-cheap", 100, 10)        # tiny cost
+    usage.track_usage("claude-fake-expensive", 10_000, 5_000)  # bigger cost
+    lines = usage.build_daily_report_lines(usage.usage_today, "2026-05-08")
+    assert lines is not None
+    text = "\n".join(lines)
+    assert "🤖 모델별 내역:" in text
+    # Expensive model should appear before cheap one in the rendered output.
+    assert text.index("claude-fake-expensive") < text.index("claude-fake-cheap")
