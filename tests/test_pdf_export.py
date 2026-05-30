@@ -124,3 +124,109 @@ def test_noise_types_filtered_out(export_pdf):
     # Whatever role the response maps to, info/progress should be gone.
     assert len(chat["messages"]) == 2
     assert all(t not in {"info", "progress"} for t in types)
+
+
+# ── progress notifications (issue #133) ──────────────────────────────
+#
+# The slow WeasyPrint render is bracketed by a progress → success/error
+# toast so the user knows a PDF is being generated. The handler is async
+# and returns a Flask Response; we drive it with a fresh event loop the
+# same way test_bridge_webhooks.py exercises aiohttp handlers.
+
+import agent as _agent  # noqa: E402  (stub installed by conftest)
+import helpers.notification as _notif  # noqa: E402  (stub installed by conftest)
+
+
+def _run(coro):
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+@pytest.fixture
+def notif_sink():
+    _notif.NotificationManager.sent.clear()
+    yield _notif.NotificationManager.sent
+    _notif.NotificationManager.sent.clear()
+
+
+def test_export_emits_progress_then_success(export_pdf, notif_sink):
+    ctx = _FakeContext("현대차 시세", [
+        _FakeLogItem(0, "user", "사용자", "현대차 오늘 시세 알려줘"),
+        _FakeLogItem(1, "response", "응답", "**현대차** 616,000원"),
+    ])
+    _agent.AgentContext._store["ctx-ok"] = ctx
+    resp = _run(export_pdf.ExportPdf().process({"context": "ctx-ok"}, None))
+
+    kinds = [n["type"] for n in notif_sink]
+    assert kinds == ["progress", "success"]
+    # Same id on both → the toast updates in place rather than stacking.
+    assert notif_sink[0]["id"] == notif_sink[1]["id"]
+    assert notif_sink[0]["group"] == "chat-pdf-export"
+    # Success carries the generated filename.
+    assert notif_sink[1]["message"].endswith(".pdf")
+    # The export itself still succeeded (PDF bytes returned).
+    assert 200 in resp.kwargs.values() or 200 in getattr(resp, "args", ())
+
+
+def test_export_per_message_progress_mentions_log_no(export_pdf, notif_sink):
+    ctx = _FakeContext("Hyundai", [
+        _FakeLogItem(0, "user", "u", "Q"),
+        _FakeLogItem(1, "response", "r", "ANSWER"),
+    ])
+    _agent.AgentContext._store["ctx-msg"] = ctx
+    _run(export_pdf.ExportPdf().process({"context": "ctx-msg", "log_no": 1}, None))
+
+    assert notif_sink[0]["type"] == "progress"
+    assert "#1" in notif_sink[0]["message"]
+    # Per-message id is distinct from the full-chat id for the same context.
+    assert notif_sink[0]["id"].endswith("-1")
+
+
+def test_export_emits_error_on_render_failure(export_pdf, notif_sink, monkeypatch):
+    ctx = _FakeContext("boom", [
+        _FakeLogItem(0, "user", "u", "Q"),
+        _FakeLogItem(1, "response", "r", "A"),
+    ])
+    _agent.AgentContext._store["ctx-err"] = ctx
+
+    def _boom(_chat):
+        raise RuntimeError("weasyprint exploded")
+
+    monkeypatch.setattr(export_pdf, "render_chat_to_pdf", _boom)
+    with pytest.raises(RuntimeError, match="exploded"):
+        _run(export_pdf.ExportPdf().process({"context": "ctx-err"}, None))
+
+    kinds = [n["type"] for n in notif_sink]
+    assert kinds == ["progress", "error"]
+    assert notif_sink[1]["id"] == notif_sink[0]["id"]
+
+
+def test_export_importerror_returns_500_and_error_toast(export_pdf, notif_sink, monkeypatch):
+    ctx = _FakeContext("noweasy", [
+        _FakeLogItem(0, "user", "u", "Q"),
+        _FakeLogItem(1, "response", "r", "A"),
+    ])
+    _agent.AgentContext._store["ctx-noweasy"] = ctx
+
+    def _no_weasy(_chat):
+        raise ImportError("No module named 'weasyprint'")
+
+    monkeypatch.setattr(export_pdf, "render_chat_to_pdf", _no_weasy)
+    resp = _run(export_pdf.ExportPdf().process({"context": "ctx-noweasy"}, None))
+
+    # Graceful 500 (not a raise) so the frontend shows a useful message.
+    assert 500 in getattr(resp, "args", ())
+    assert [n["type"] for n in notif_sink] == ["progress", "error"]
+
+
+def test_export_no_toast_when_chat_empty(export_pdf, notif_sink):
+    """Empty-chat validation returns before the render bracket, so no
+    progress toast — the frontend surfaces the 4xx immediately."""
+    ctx = _FakeContext("empty", [])
+    _agent.AgentContext._store["ctx-empty"] = ctx
+    _run(export_pdf.ExportPdf().process({"context": "ctx-empty"}, None))
+    assert notif_sink == []

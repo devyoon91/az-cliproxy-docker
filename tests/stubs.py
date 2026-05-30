@@ -57,6 +57,35 @@ def _stub_helpers() -> None:
     api_mod.Request = object
     helpers.api = api_mod  # type: ignore[attr-defined]
 
+    # `helpers.notification` — chat_pdf_export emits PDF-generation progress
+    # toasts via NotificationManager (issue #133). Record every send so tests
+    # can assert the progress → success/error transitions.
+    notif_mod = _ensure_module("helpers.notification")
+
+    class _NotificationType:
+        INFO = "info"
+        SUCCESS = "success"
+        WARNING = "warning"
+        ERROR = "error"
+        PROGRESS = "progress"
+
+    class _NotificationPriority:
+        NORMAL = 10
+        HIGH = 20
+
+    class _NotificationManager:
+        sent: list = []
+
+        @staticmethod
+        def send_notification(**kwargs):
+            _NotificationManager.sent.append(kwargs)
+            return kwargs
+
+    notif_mod.NotificationType = _NotificationType
+    notif_mod.NotificationPriority = _NotificationPriority
+    notif_mod.NotificationManager = _NotificationManager
+    helpers.notification = notif_mod  # type: ignore[attr-defined]
+
 
 def _stub_agent() -> None:
     """`agent.AgentContext`, `agent.LoopData`."""
