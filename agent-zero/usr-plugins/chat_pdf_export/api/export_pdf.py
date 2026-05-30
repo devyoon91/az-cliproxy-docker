@@ -29,6 +29,49 @@ if str(_PLUGIN_ROOT) not in sys.path:
 
 from render.render import render_chat_to_pdf  # noqa: E402
 
+# Progress notifications are best-effort: a missing or changed Agent Zero
+# notification API must never break the actual export. See issue #133.
+try:
+    from helpers.notification import (  # noqa: E402
+        NotificationManager,
+        NotificationPriority,
+        NotificationType,
+    )
+    _NOTIFY_AVAILABLE = True
+except Exception:  # pragma: no cover - depends on agent-zero version
+    _NOTIFY_AVAILABLE = False
+
+
+def _notify(notif_id: str, kind: str, title: str, message: str, display_time: int) -> None:
+    """Best-effort toast via Agent Zero's NotificationManager.
+
+    `kind` is one of "progress" | "success" | "error". Reusing the same
+    `notif_id` makes the manager update the existing toast in place, so a
+    single notification transitions 생성 중 → 완료/실패 rather than stacking.
+    Swallows every error — the PDF export must succeed even when the
+    notification layer doesn't.
+    """
+    if not _NOTIFY_AVAILABLE:
+        return
+    try:
+        type_map = {
+            "progress": NotificationType.PROGRESS,
+            "success": NotificationType.SUCCESS,
+            "error": NotificationType.ERROR,
+        }
+        NotificationManager.send_notification(
+            type=type_map.get(kind, NotificationType.INFO),
+            priority=NotificationPriority.NORMAL,
+            message=message,
+            title=title,
+            id=notif_id,
+            group="chat-pdf-export",
+            display_time=display_time,
+        )
+    except Exception:  # pragma: no cover - defensive; never break export
+        pass
+
+
 # LogItem.type → our normalized role. Types we don't surface in the PDF
 # (progress/info/hint/etc.) map to None and get skipped.
 _TYPE_MAP: dict[str, str | None] = {
@@ -173,14 +216,36 @@ class ExportPdf(ApiHandler):
                 )
             return Response("Chat has no exportable messages", 400)
 
+        # Bracket the slow WeasyPrint render with a progress → done toast so
+        # the user knows the PDF is being generated (issue #133). Stable id
+        # per (context, log_no) so re-clicks update one toast, not a stack.
+        notif_id = f"chat-pdf-export-{ctxid}-{log_no if log_no is not None else 'full'}"
+        _notify(
+            notif_id,
+            "progress",
+            "PDF 추출",
+            "PDF 생성 중…" if log_no is None else f"메시지 #{log_no} PDF 생성 중…",
+            display_time=120,  # keep visible through a long render
+        )
+
         try:
             pdf_bytes = render_chat_to_pdf(chat)
         except ImportError as e:
+            _notify(
+                notif_id,
+                "error",
+                "PDF 추출 실패",
+                "PDF 렌더링 의존성이 없습니다 (weasyprint).",
+                display_time=10,
+            )
             return Response(
                 f"PDF rendering dependency missing: {e}. "
                 f"Install via `pip install weasyprint` inside the agent-zero container.",
                 500,
             )
+        except Exception as e:
+            _notify(notif_id, "error", "PDF 추출 실패", str(e)[:200], display_time=10)
+            raise
 
         # Korean-safe filename (RFC 5987). Browsers prefer the filename* form
         # for non-ASCII, but we also send a sanitized ASCII fallback for
@@ -193,6 +258,8 @@ class ExportPdf(ApiHandler):
             f'attachment; filename="{ascii_fallback}"; '
             f"filename*=UTF-8''{quote(utf8_name)}"
         )
+
+        _notify(notif_id, "success", "PDF 추출 완료", utf8_name, display_time=4)
 
         return Response(
             response=pdf_bytes,
