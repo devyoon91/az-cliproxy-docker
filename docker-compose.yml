@@ -25,10 +25,10 @@ services:
 
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
-    # Custom image: extends agent0ai/agent-zero:v1.13 with weasyprint for the
+    # Custom image: extends agent0ai/agent-zero:v1.18 with weasyprint for the
     # local chat_pdf_export plugin. See agent-zero/Dockerfile.
     build: ./agent-zero
-    image: az-cliproxy-docker-agent-zero:v1.13-pdf
+    image: az-cliproxy-docker-agent-zero:v1.18-pdf
     container_name: agent-zero
     ports:
       - "50001:80"
