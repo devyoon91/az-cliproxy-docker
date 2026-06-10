@@ -1,13 +1,12 @@
 {
     "_comment_provider": "프로바이더 선택: anthropic (권장, 프롬프트 캐싱 지원), openai, other (CLIProxy 등)",
+    "_comment_kwargs": "*_model_kwargs는 비워둘 것 — Fable 5/Opus 4.7+는 sampling 파라미터(temperature, top_p, top_k)를 400으로 거부한다 (#143). 구모델도 temperature 생략 시 기본값으로 동작.",
 
     "version": "v0.9.3",
     "chat_model_provider": "anthropic",
     "chat_model_name": "claude-sonnet-4-6",
     "chat_model_api_base": "",
-    "chat_model_kwargs": {
-        "temperature": "0"
-    },
+    "chat_model_kwargs": {},
     "chat_model_ctx_length": 50000,
     "chat_model_ctx_history": 0.5,
     "chat_model_vision": true,
@@ -19,9 +18,7 @@
     "util_model_api_base": "",
     "util_model_ctx_length": 100000,
     "util_model_ctx_input": 0.7,
-    "util_model_kwargs": {
-        "temperature": "0"
-    },
+    "util_model_kwargs": {},
     "util_model_rl_requests": 0,
     "util_model_rl_input": 0,
     "util_model_rl_output": 0,
@@ -35,9 +32,7 @@
     "browser_model_name": "claude-haiku-4-5",
     "browser_model_api_base": "",
     "browser_model_vision": true,
-    "browser_model_kwargs": {
-        "temperature": "0"
-    },
+    "browser_model_kwargs": {},
     "memory_recall_enabled": true,
     "memory_recall_interval": 5,
     "memory_recall_history_len": 10000,
