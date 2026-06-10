@@ -91,3 +91,42 @@ def test_normalize_model_strips_anthropic_prefix(cost):
     assert cost._normalize_model("claude-sonnet-4-6") == "claude-sonnet-4-6"
     assert cost._normalize_model("") == ""
     assert cost._normalize_model(None) is None  # type: ignore[arg-type]
+
+
+# ── family-aware fallback (#141) ────────────────────────────────────
+# With the LiteLLM map empty (fetch failed / not yet loaded), Anthropic
+# models price by family tier instead of the flat $3/$15 fallback —
+# which undercounted Opus ~1.7x ($5/$25 actual) and Fable 5 ~3.3x
+# ($10/$50 actual).
+
+
+def test_family_fallback_opus(cost):
+    cost._model_cost_map.clear()
+    c = cost.calc_cost("claude-opus-4-8", 1_000_000, 1_000_000)
+    assert c == pytest.approx(5.0 + 25.0, rel=1e-9)
+
+
+def test_family_fallback_fable_with_prefix(cost):
+    cost._model_cost_map.clear()
+    c = cost.calc_cost("anthropic/claude-fable-5", 1_000_000, 1_000_000)
+    assert c == pytest.approx(10.0 + 50.0, rel=1e-9)
+
+
+def test_family_fallback_cache_rates_derive_from_input(cost):
+    """Cache rates derive from the family input rate: read 0.1x, write 1.25x."""
+    cost._model_cost_map.clear()
+    c = cost.calc_cost(
+        "claude-opus-4-8",
+        input_tokens=2_000_000,
+        output_tokens=0,
+        cache_read_tokens=1_000_000,
+        cache_creation_tokens=1_000_000,
+    )
+    # regular = 0; read 1M * $0.50/1M + write 1M * $6.25/1M
+    assert c == pytest.approx(0.5 + 6.25, rel=1e-9)
+
+
+def test_family_fallback_not_applied_to_unknown_models(cost):
+    cost._model_cost_map.clear()
+    c = cost.calc_cost(FALLBACK_MODEL, 1_000_000, 1_000_000)
+    assert c == pytest.approx(3.0 + 15.0, rel=1e-9)  # generic fallback intact

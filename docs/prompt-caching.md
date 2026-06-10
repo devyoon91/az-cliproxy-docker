@@ -145,11 +145,11 @@ ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
     "chat_model_api_base": "",
 
     "util_model_provider": "anthropic",
-    "util_model_name": "claude-haiku-3.5-sonnet",
+    "util_model_name": "claude-haiku-4-5",
     "util_model_api_base": "",
 
     "browser_model_provider": "anthropic",
-    "browser_model_name": "claude-haiku-3.5-sonnet",
+    "browser_model_name": "claude-haiku-4-5",
     "browser_model_api_base": ""
 }
 ```

@@ -43,19 +43,26 @@ _FALLBACK = {
     "cache_creation_input_token_cost": 0.00000375,  # $3.75 / 1M (25% premium)
 }
 
-# Common model-name aliases → canonical LiteLLM key. AZ sometimes prefixes
-# with "anthropic/" or uses shorthand like "claude-sonnet-4-6" when the
-# LiteLLM key is "claude-sonnet-4-20250929". Extend as needed.
-_ALIASES = {
-    "anthropic/claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
-    "anthropic/claude-sonnet-4-5": "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-5": "claude-sonnet-4-5-20250929",
-    "anthropic/claude-haiku-4-5": "claude-haiku-4-5-20251001",
-    "claude-haiku-4-5": "claude-haiku-4-5-20251001",
-    "anthropic/claude-opus-4-5": "claude-opus-4-5-20250929",
-    "claude-opus-4-5": "claude-opus-4-5-20250929",
+# Anthropic family rates (input, output) per token, used when the LiteLLM
+# table is unavailable but the model name still tells us the tier (#141).
+# Without this, a table-load failure prices Opus 4.x at the flat $3/$15
+# fallback — a ~1.7x undercount ($5/$25 actual), and Fable 5 at ~3.3x off
+# ($10/$50 actual). Cache rates derive from input: read 0.1x, write 1.25x.
+_FAMILY_FALLBACK = {
+    "claude-fable": (0.00001, 0.00005),    # $10 / $50 per 1M
+    "claude-opus": (0.000005, 0.000025),   # $5 / $25
+    "claude-sonnet": (0.000003, 0.000015),  # $3 / $15
+    "claude-haiku": (0.000001, 0.000005),  # $1 / $5
 }
+
+# Model-name aliases → canonical LiteLLM key. Only needed when the LiteLLM
+# key differs from the AZ-side name after stripping the "anthropic/" prefix.
+# LiteLLM now keys every model AZ uses natively — bare names for the whole
+# lineup including claude-sonnet-4-6, claude-opus-4-6/7/8, claude-fable-5 —
+# so exact match + prefix strip covers everything. The old entries mapped
+# claude-sonnet-4-6 onto the dated 4-5 snapshot key, shadowing the native
+# key for prefixed forms (#141). Extend only for genuine key mismatches.
+_ALIASES: dict[str, str] = {}
 
 _PRICE_TABLE: dict = {}
 _LOADED = False
@@ -121,13 +128,29 @@ def _resolve_key(model: str | None) -> str | None:
     return None
 
 
+def _family_rates(model: str | None) -> dict | None:
+    """Tier-accurate rates from the model name when the table has no entry."""
+    if not model:
+        return None
+    name = model.split("/", 1)[1] if model.startswith("anthropic/") else model
+    for prefix, (in_rate, out_rate) in _FAMILY_FALLBACK.items():
+        if name.startswith(prefix):
+            return {
+                "input_cost_per_token": in_rate,
+                "output_cost_per_token": out_rate,
+                "cache_read_input_token_cost": in_rate * 0.10,
+                "cache_creation_input_token_cost": in_rate * 1.25,
+            }
+    return None
+
+
 def get_rates(model: str | None) -> dict:
     """Return the 4-rate dict for a model, falling back to `_FALLBACK`."""
     _ensure_loaded()
     key = _resolve_key(model)
     info = _PRICE_TABLE.get(key) if key else None
     if info is None:
-        return dict(_FALLBACK)
+        return _family_rates(model) or dict(_FALLBACK)
     # Anthropic entries may omit cache fields for models without prompt caching.
     # Default creation to input*1.25, read to input*0.1 per Anthropic's schedule.
     in_rate = info.get("input_cost_per_token", _FALLBACK["input_cost_per_token"])

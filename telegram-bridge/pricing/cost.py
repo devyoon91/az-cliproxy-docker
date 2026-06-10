@@ -70,27 +70,43 @@ def _load_model_cost_map() -> None:
     logger.warning("[Cost] Using fallback cost estimation")
 
 
+# Anthropic family rates (input, output) per token, used when the LiteLLM
+# table is unavailable but the model name still tells us the tier (#141).
+# Mirrors agent-zero/lib/pricing.py:_FAMILY_FALLBACK — keep in sync.
+_FAMILY_FALLBACK = {
+    "claude-fable": (0.00001, 0.00005),    # $10 / $50 per 1M
+    "claude-opus": (0.000005, 0.000025),   # $5 / $25
+    "claude-sonnet": (0.000003, 0.000015),  # $3 / $15
+    "claude-haiku": (0.000001, 0.000005),  # $1 / $5
+}
+
+
 def _model_info(model: str) -> dict:
     """Resolve a model name against the LiteLLM price map with AZ aliasing.
 
-    AZ tags streaming calls as "anthropic/claude-sonnet-4-6" but LiteLLM
-    keys them as "claude-sonnet-4-5-20250929". Try the exact key first,
-    then a few known aliases, then strip the `anthropic/` prefix.
+    LiteLLM carries native keys for the current Anthropic lineup
+    (claude-sonnet-4-6, claude-opus-4-6/7/8, claude-fable-5) as well as
+    bare legacy names, so exact match plus `anthropic/` prefix-strip
+    covers everything AZ emits. The old alias dict mapped
+    claude-sonnet-4-6 onto the dated 4-5 snapshot key, shadowing the
+    native key (#141).
     """
     if model in _model_cost_map:
         return _model_cost_map[model]
-    aliases = {
-        "anthropic/claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
-        "claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
-        "anthropic/claude-haiku-4-5": "claude-haiku-4-5-20251001",
-    }
-    if model in aliases and aliases[model] in _model_cost_map:
-        return _model_cost_map[aliases[model]]
     if model.startswith("anthropic/"):
         tail = model.split("/", 1)[1]
         if tail in _model_cost_map:
             return _model_cost_map[tail]
     return {}
+
+
+def _family_rates(model: str) -> tuple[float, float] | None:
+    """Tier-accurate (input, output) rates from the model name alone."""
+    name = model.split("/", 1)[1] if model.startswith("anthropic/") else model
+    for prefix, rates in _FAMILY_FALLBACK.items():
+        if name.startswith(prefix):
+            return rates
+    return None
 
 
 def calc_cost(
@@ -118,8 +134,10 @@ def calc_cost(
     Same fix lives in agent-zero/lib/pricing.py:compute_cost.
     """
     info = _model_info(model)
-    in_rate = info.get("input_cost_per_token", 0.000003)  # $3 / 1M fallback
-    out_rate = info.get("output_cost_per_token", 0.000015)  # $15 / 1M
+    family = _family_rates(model) if not info else None
+    fb_in, fb_out = family or (0.000003, 0.000015)  # generic $3/$15 last resort
+    in_rate = info.get("input_cost_per_token", fb_in)
+    out_rate = info.get("output_cost_per_token", fb_out)
     read_rate = info.get("cache_read_input_token_cost", in_rate * 0.10)
     create_rate = info.get("cache_creation_input_token_cost", in_rate * 1.25)
     inp = max(0, int(input_tokens))

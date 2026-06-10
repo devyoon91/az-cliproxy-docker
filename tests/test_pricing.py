@@ -104,3 +104,34 @@ def test_format_usd_breakpoints(pricing):
     assert pricing.format_usd(1.2345) == "$1.2345"          # >= 0.01 → 4dp
     assert pricing.format_usd(0.001234) == "$0.001234"      # >= 0.0001 → 6dp
     assert pricing.format_usd(0.000005) == "$5.00e-06"      # otherwise scientific
+
+
+# ── family-aware fallback (#141) ────────────────────────────────────
+
+
+def _load_pricing_offline():
+    """Fresh module with the price table forced empty — exercises the
+    fallback paths deterministically, no network."""
+    mod = _load_pricing()
+    mod._LOADED = True  # skip remote/bundled load; _PRICE_TABLE stays {}
+    return mod
+
+
+def test_family_fallback_rates_offline():
+    """With no price table, Anthropic models price by family tier instead
+    of the flat $3/$15 fallback (Opus would be ~1.7x under, Fable ~3.3x)."""
+    pricing = _load_pricing_offline()
+    opus = pricing.get_rates("claude-opus-4-8")
+    assert opus["input_cost_per_token"] == pytest.approx(5e-6)
+    assert opus["output_cost_per_token"] == pytest.approx(25e-6)
+    fable = pricing.get_rates("anthropic/claude-fable-5")  # prefix stripped
+    assert fable["input_cost_per_token"] == pytest.approx(10e-6)
+    assert fable["output_cost_per_token"] == pytest.approx(50e-6)
+    # Cache rates derive from family input rate: read 0.1x, write 1.25x.
+    assert fable["cache_read_input_token_cost"] == pytest.approx(1e-6)
+    assert fable["cache_creation_input_token_cost"] == pytest.approx(12.5e-6)
+
+
+def test_family_fallback_not_applied_to_unknown_models():
+    pricing = _load_pricing_offline()
+    assert pricing.get_rates("model-that-does-not-exist-xyz") == pricing._FALLBACK

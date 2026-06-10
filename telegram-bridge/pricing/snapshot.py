@@ -62,14 +62,12 @@ def _resolve_litellm_key(model: str) -> str | None:
         return None
     if model in _model_cost_map:
         return model
-    aliases = {
-        "anthropic/claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
-        "claude-sonnet-4-6": "claude-sonnet-4-5-20250929",
-        "anthropic/claude-haiku-4-5": "claude-haiku-4-5-20251001",
-        "claude-haiku-4-5": "claude-haiku-4-5-20251001",
-    }
-    if model in aliases and aliases[model] in _model_cost_map:
-        return aliases[model]
+    # LiteLLM now keys the whole lineup natively (claude-sonnet-4-6,
+    # claude-opus-4-6/7/8, claude-fable-5, bare legacy names) — exact
+    # match + prefix strip resolves every AZ form to ONE canonical key.
+    # The old alias dict sent prefixed forms to dated snapshot keys while
+    # bare forms exact-matched native keys, splitting one model across
+    # two snapshot identifiers (#141).
     if model.startswith("anthropic/"):
         tail = model.split("/", 1)[1]
         if tail in _model_cost_map:
@@ -236,7 +234,7 @@ def _format_pricing_diff(changes: list[dict], prev_date: str, curr_date: str) ->
 
     Shape:
       💱 가격 변동 감지 (2026-04-27 → 2026-04-28)
-        claude-sonnet-4-5-20250929 (claude-sonnet-4-6)
+        claude-sonnet-4-6 (anthropic/claude-sonnet-4-6)
           input_cost_per_token: $3.00 → $2.50 / 1M (-16.7%)
     """
     def fmt_rate(v) -> str:
