@@ -84,18 +84,20 @@ def snap(tmp_path):
 # ── _resolve_litellm_key ────────────────────────────────────────────
 
 
-def test_resolve_litellm_key_known_alias(snap):
-    """When the canonical key exists in the cost map, alias maps to it."""
+def test_resolve_litellm_key_native_key(snap):
+    """Both AZ forms resolve to the ONE native LiteLLM key (#141).
+
+    The old alias map sent prefixed forms to the dated 4-5 snapshot key
+    while bare forms exact-matched the native key, splitting one model
+    across two snapshot identifiers.
+    """
     snap._model_cost_map.clear()
-    snap._model_cost_map.update({"claude-sonnet-4-5-20250929": {}})
+    snap._model_cost_map.update({"claude-sonnet-4-6": {}})
     assert (
         snap._resolve_litellm_key("anthropic/claude-sonnet-4-6")
-        == "claude-sonnet-4-5-20250929"
+        == "claude-sonnet-4-6"
     )
-    assert (
-        snap._resolve_litellm_key("claude-sonnet-4-6")
-        == "claude-sonnet-4-5-20250929"
-    )
+    assert snap._resolve_litellm_key("claude-sonnet-4-6") == "claude-sonnet-4-6"
 
 
 def test_resolve_litellm_key_strip_anthropic_prefix(snap):
@@ -299,7 +301,7 @@ def test_interested_models_from_task_jsons(snap, tmp_path):
     """End-to-end of the task→model rollup. Writes fake task JSON,
     reads it through `_load_task_jsons`, expects a {key: aliases} map."""
     snap._model_cost_map.clear()
-    snap._model_cost_map.update({"claude-sonnet-4-5-20250929": {}})
+    snap._model_cost_map.update({"claude-sonnet-4-6": {}})
 
     # Set up task dir matching `agg_mod.TASKS_DIR`.
     from datetime import datetime, timedelta, timezone
@@ -321,9 +323,10 @@ def test_interested_models_from_task_jsons(snap, tmp_path):
     (tasks_dir / "t1.json").write_text(json.dumps(payload), encoding="utf-8")
 
     out = snap._interested_models(window_days=7)
-    # Only the resolvable model surfaces; both aliases (sorted) are kept.
-    assert list(out.keys()) == ["claude-sonnet-4-5-20250929"]
-    assert out["claude-sonnet-4-5-20250929"] == [
+    # Only the resolvable model surfaces; both aliases (sorted) are kept
+    # under the ONE native LiteLLM key (#141).
+    assert list(out.keys()) == ["claude-sonnet-4-6"]
+    assert out["claude-sonnet-4-6"] == [
         "anthropic/claude-sonnet-4-6",
         "claude-sonnet-4-6",
     ]
