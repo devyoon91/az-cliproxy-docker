@@ -41,7 +41,10 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
       - ./agent-zero/work_dir:/a0/work_dir
-      - ./agent-zero/memory:/a0/memory
+      # AZ v1.x writes memory/index to /a0/usr/memory (usr-area split, ~v1.13),
+      # not /a0/memory. Mounting the old path left learned memory in the
+      # container-local layer → wiped on every recreate/upgrade (issue #146).
+      - ./agent-zero/memory:/a0/usr/memory
       - ./agent-zero/logs:/a0/logs
       - ./agent-zero/prompts:/a0/prompts
       - ./agent-zero/git-init.sh:/a0/git-init.sh:ro
