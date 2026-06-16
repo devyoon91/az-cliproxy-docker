@@ -13,6 +13,9 @@ agent-zero/logs/
 # Agent Zero runtime data
 agent-zero/work_dir/
 agent-zero/memory/
+# Upstream-generated DOX doc copied into the mounted prompts dir on boot
+# (v1.19+). Not our override — ignore so it doesn't pollute git status.
+agent-zero/prompts/AGENTS.md
 
 # Backups (contain secrets)
 backups/

@@ -1,6 +1,6 @@
 # Agent Zero + CLIProxy 구축 가이드
 
-> Agent Zero v1.18 | CLIProxy v6.9.18 | Telegram Bridge (custom)
+> Agent Zero v1.20 | CLIProxy v6.9.18 | Telegram Bridge (custom)
 
 이 문서는 [README.md](README.md) 를 읽었다는 가정 하에, 신규 사용자가 부팅까지
 실수 없이 도달하기 위한 **walkthrough** 입니다. README 가 "이 저장소가 무엇을
