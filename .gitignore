@@ -16,6 +16,11 @@ agent-zero/memory/
 # Upstream-generated DOX doc copied into the mounted prompts dir on boot
 # (v1.19+). Not our override — ignore so it doesn't pollute git status.
 agent-zero/prompts/AGENTS.md
+# v2.0 ships new default prompts (parallel tools, projects/context protocol)
+# seeded into the mounted prompts dir on boot. Not our overrides.
+agent-zero/prompts/agent.context.protocol.md
+agent-zero/prompts/agent.protocol.projects.instructions.md
+agent-zero/prompts/agent.system.tool.parallel.md
 
 # Backups (contain secrets)
 backups/
