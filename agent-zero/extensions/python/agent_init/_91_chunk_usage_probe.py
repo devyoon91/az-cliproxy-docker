@@ -45,6 +45,13 @@ Fix: patch `litellm.acompletion` at module load. When stream=True:
 Also re-points `models.acompletion` (AZ imports it at module load, so the
 litellm.acompletion assignment alone doesn't reach the already-bound name).
 
+v2.0 note: the model-call transport moved into helpers.litellm_transport,
+which binds `acompletion`/`completion` by reference at import — so we also
+re-point that module (see execute()). v2.0 additionally defaults to the
+Responses API (litellm aresponses), which breaks anthropic streaming and is
+not wrapped here; we pin a0_api_mode=chat_completions via settings so the
+chat-completions path (the one this probe covers) is always used.
+
 See issue #13 (M2).
 """
 
@@ -530,11 +537,30 @@ class StreamUsageCapture(Extension):
 
         # Re-point models.{acompletion,completion} which were imported
         # by reference at AZ module load — the litellm.* assignment alone
-        # doesn't reach the already-bound names.
+        # doesn't reach the already-bound names. (v1.x binding site; on v2.0
+        # models.py no longer imports these, so this is a harmless no-op.)
         try:
             import models as _az_models
             _az_models.acompletion = _wrapped_acompletion
             _az_models.completion = _wrapped_completion
+        except Exception:
+            pass
+
+        # v2.0: the chat/util call path moved into helpers.litellm_transport,
+        # which binds `acompletion`/`completion` by reference at import
+        # (`from litellm import acompletion, completion, ...`). That binding
+        # happens before this agent_init hook runs, so patching litellm.*
+        # alone never reaches the names the transport actually calls. Re-point
+        # the transport module too so streaming usage capture keeps working.
+        # NOTE: this only covers the chat_completions transport path. v2.0
+        # defaults to the Responses API (litellm aresponses), which (a) is
+        # broken for anthropic streaming and (b) is not wrapped here — so we
+        # pin a0_api_mode=chat_completions in settings (litellm_global_kwargs).
+        # See settings.example.json + GUIDE.md. (No-op on v1.x: module absent.)
+        try:
+            import helpers.litellm_transport as _az_transport
+            _az_transport.acompletion = _wrapped_acompletion
+            _az_transport.completion = _wrapped_completion
         except Exception:
             pass
         _patched = True
