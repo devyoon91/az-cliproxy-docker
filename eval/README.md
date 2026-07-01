@@ -149,7 +149,7 @@ bridge 가 마운트된 `./eval/baseline.json` 을 그대로 덮어쓰므로 그
 
 | 이름 | 용도 |
 |---|---|
-| `ANTHROPIC_API_KEY` | runner(메인 응답) + judge(채점) 모두 사용. CLIProxy 트랙은 CI 비호환 — Direct API 만 |
+| `ANTHROPIC_API_KEY` | runner(메인 응답) + judge(채점) 모두 사용 (Anthropic Direct API) |
 
 Settings → Secrets and variables → Actions 에서 추가.
 

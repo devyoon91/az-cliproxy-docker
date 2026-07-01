@@ -9,8 +9,7 @@ name: Eval Regression
 #
 # 필수 secret:
 #   ANTHROPIC_API_KEY  — runner(메인 응답) + judge(채점) 모두 Anthropic
-#                        API 키 사용.  CLIProxy 트랙은 CI 에 적합하지
-#                        않아 (OAuth 토큰 필요) Direct API 만 지원.
+#                        API 키 사용 (Direct API).
 #
 # 비용 추정:
 #   골든셋 10개 케이스 풀 실행 = ~$0.50 (Sonnet 4.6 + Haiku 4.5 채점).
@@ -83,9 +82,8 @@ jobs:
           pip install pyyaml==6.0.2 aiohttp==3.10.* anthropic==0.40.*
 
       - name: Prepare AZ minimal config
-        # CI 에서는 Direct API 트랙(Anthropic) 만 사용 — CLIProxy 컨테이너는
-        # 띄우지 않는다.  AZ settings.example.json 이 이미 anthropic provider
-        # 기본값을 가지므로 그대로 복사.
+        # AZ settings.example.json 이 이미 anthropic provider 기본값을
+        # 가지므로 그대로 복사.
         run: |
           mkdir -p agent-zero/logs/tasks agent-zero/work_dir agent-zero/memory
           cp agent-zero/settings.example.json agent-zero/settings.json
@@ -98,12 +96,12 @@ jobs:
           DASHBOARD_TOKEN=
           EOF
 
-      - name: Boot Agent Zero (no cliproxy)
-        # `--no-deps` 로 cliproxy 의존성 skip.  `--build` 로 image 빌드 (3-5분
-        # 소요).  포트 50001 매핑이 docker-compose.yml 에 이미 있어서 host 에서
-        # localhost:50001 로 접근 가능.
+      - name: Boot Agent Zero
+        # `--build` 로 image 빌드 (3-5분 소요).  포트 50001 매핑이
+        # docker-compose.yml 에 이미 있어서 host 에서 localhost:50001 로
+        # 접근 가능.
         run: |
-          docker compose up -d --no-deps --build agent-zero
+          docker compose up -d --build agent-zero
           # 헬스체크 — / 가 200 응답 (AZ UI) 할 때까지 최대 5분.
           for i in $(seq 1 60); do
             if curl -sf -o /dev/null -m 3 http://localhost:50001/; then

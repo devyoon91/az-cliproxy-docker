@@ -9,10 +9,8 @@
 | 카테고리 | 파일/디렉토리 | 설명 | 민감도 | 백업 모드 |
 |----------|-------------|------|:------:|:---------:|
 | **설정** | `.env` | API 토큰, Git PAT, Telegram 토큰 | 🔴 높음 | light |
-| **설정** | `cliproxy/config.yaml` | CLIProxy 설정 (비밀번호 해시) | 🔴 높음 | light |
 | **설정** | `agent-zero/settings.json` | 모델, 플러그인, MCP 설정 | 🟡 중간 | light |
 | **설정** | `docker-compose.yml` | 서비스 구성 | 🟢 낮음 | light |
-| **인증** | `cliproxy/auth/*.json` | LLM OAuth 토큰 | 🔴 높음 | light |
 | **프롬프트** | `agent-zero/prompts/` | 커스텀 시스템 프롬프트 | 🟢 낮음 | config |
 | **프로필** | `agent-zero/agents/` | 에이전트 프로필 (developer, reviewer, devops) | 🟢 낮음 | config |
 | **스크립트** | `agent-zero/git-init.sh` | Git/GitHub CLI 초기화 | 🟢 낮음 | config |
@@ -21,7 +19,6 @@
 | **메모리** | `agent-zero/memory/` | FAISS 벡터 DB (장기 기억) | 🟡 중간 | full |
 | **작업물** | `agent-zero/work_dir/` | 프로젝트 파일, clone된 저장소 | 🟡 중간 | full |
 | **로그** | `agent-zero/logs/` | 채팅 로그 (HTML) | 🟢 낮음 | full |
-| **로그** | `cliproxy/logs/` | CLIProxy API 로그 | 🟢 낮음 | full |
 
 ---
 

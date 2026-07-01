@@ -1,7 +1,7 @@
 [project]
 name = "az-cliproxy-docker"
 version = "0.0.0"
-description = "Agent Zero + CLIProxy + Telegram Bridge harness"
+description = "Agent Zero + Telegram Bridge harness"
 requires-python = ">=3.12"
 
 [tool.ruff]
