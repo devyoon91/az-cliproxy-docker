@@ -7,6 +7,6 @@
 # Bumping the base image: edit the FROM line and rebuild
 # (`docker compose build agent-zero`).
 
-FROM agent0ai/agent-zero:v2.0
+FROM agent0ai/agent-zero:v2.1
 
 RUN /opt/venv-a0/bin/pip install --no-cache-dir --disable-pip-version-check weasyprint
