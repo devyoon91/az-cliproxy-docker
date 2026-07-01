@@ -1,28 +1,6 @@
 version: "3.8"
 
 services:
-  # ── CLIProxy: Claude Code CLI → OpenAI-compatible API ──
-  cliproxy:
-    image: eceasy/cli-proxy-api:v6.9.18
-    container_name: cliproxy
-    ports:
-      - "8317:8317"   # OpenAI-compatible API
-      - "8085:8085"   # Web Management UI
-      - "54545:54545" # OAuth callback
-    volumes:
-      - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml
-      - ./cliproxy/auth:/root/.cli-proxy-api
-      - ./cliproxy/logs:/CLIProxyAPI/logs
-    restart: unless-stopped
-    networks:
-      - az-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8317/v1/models"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
   # ── Agent Zero: AI Agent Framework ──
   agent-zero:
     # Custom image: extends agent0ai/agent-zero:v2.1 with weasyprint for the
@@ -77,9 +55,6 @@ services:
       # (claude-sonnet-4.6 with a DOT) that Anthropic rejects with 404.
       - ./agent-zero/usr-plugins:/a0/usr/plugins
     entrypoint: ["/bin/sh", "-c", "sh /a0/git-init.sh && exec /exe/initialize.sh ${BRANCH:-main}"]
-    depends_on:
-      cliproxy:
-        condition: service_started
     restart: unless-stopped
     networks:
       - az-net

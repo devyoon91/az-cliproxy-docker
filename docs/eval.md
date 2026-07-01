@@ -246,8 +246,6 @@ GitHub repo Settings → Secrets and variables → Actions:
 |---|---|
 | `ANTHROPIC_API_KEY` | runner + judge 모두 Anthropic Direct API 호출 |
 
-CLIProxy 트랙은 CI 비호환 (OAuth 토큰 필요) — Direct API 만 지원.
-
 ### 7.3 baseline 기록
 
 첫 회차에는 `eval/baseline.json` 이 없으므로 워크플로우는 \"no baseline\" 노티스만

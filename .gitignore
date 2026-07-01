@@ -1,13 +1,8 @@
 # Secrets
 .env
-cliproxy/config.yaml
 agent-zero/settings.json
 
-# OAuth tokens (sensitive)
-cliproxy/auth/
-
 # Logs
-cliproxy/logs/
 agent-zero/logs/
 
 # Agent Zero runtime data

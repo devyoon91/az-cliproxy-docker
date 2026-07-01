@@ -1,9 +1,9 @@
 #!/bin/bash
 # ── Agent Zero Harness Kit 백업 스크립트 ──
 # 사용법: ./scripts/backup.sh [full|config|light]
-#   full   - 전체 백업 (설정 + 인증 + 메모리 + 프롬프트 + 프로필 + 로그 + 작업물)
-#   config - 설정만 백업 (설정 + 인증 + 프롬프트 + 프로필)
-#   light  - 경량 백업 (설정 + 인증만, 민감 데이터)
+#   full   - 전체 백업 (설정 + 메모리 + 프롬프트 + 프로필 + 로그 + 작업물)
+#   config - 설정만 백업 (설정 + 프롬프트 + 프로필)
+#   light  - 경량 백업 (설정 파일만: .env·settings.json 등 민감 데이터)
 
 set -e
 
@@ -24,14 +24,8 @@ echo "========================================="
 # 공통: 설정 파일
 BACKUP_FILES=(
     ".env"
-    "cliproxy/config.yaml"
     "agent-zero/settings.json"
     "docker-compose.yml"
-)
-
-# 공통: 인증
-BACKUP_DIRS_AUTH=(
-    "cliproxy/auth"
 )
 
 # config: 프롬프트 + 프로필 + 사용자 플러그인 상태 + 브리지 영구 상태
@@ -62,7 +56,6 @@ BACKUP_DIRS_FULL=(
     "agent-zero/memory"
     "agent-zero/logs"
     "agent-zero/work_dir"
-    "cliproxy/logs"
 )
 
 cd "$PROJECT_DIR"
@@ -74,13 +67,6 @@ TARGETS=()
 for f in "${BACKUP_FILES[@]}"; do
     if [ -e "$f" ]; then
         TARGETS+=("$f")
-    fi
-done
-
-# 인증 디렉토리
-for d in "${BACKUP_DIRS_AUTH[@]}"; do
-    if [ -d "$d" ]; then
-        TARGETS+=("$d")
     fi
 done
 

@@ -1,5 +1,5 @@
 {
-    "_comment_provider": "프로바이더 선택: anthropic (권장, 프롬프트 캐싱 지원), openai, other (CLIProxy 등)",
+    "_comment_provider": "프로바이더 선택: anthropic (권장, 프롬프트 캐싱 지원), openai, other (OpenAI 호환 엔드포인트)",
     "_comment_kwargs": "*_model_kwargs는 비워둘 것 — Fable 5/Opus 4.7+는 sampling 파라미터(temperature, top_p, top_k)를 400으로 거부한다 (#143). 구모델도 temperature 생략 시 기본값으로 동작.",
     "_comment_transport": "litellm_global_kwargs.a0_api_mode=chat_completions 필수 — AZ v2.0은 기본 Responses API(litellm aresponses)를 쓰는데, anthropic을 Responses로 스트리밍하면 litellm 1.88.1이 'Unexpected response type: async_generator'로 깨진다. chat_completions로 고정해야 chat/util 호출이 동작하고, usage probe(_91)도 이 경로만 캡처한다.",
 

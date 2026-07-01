@@ -121,7 +121,7 @@ agent.call_chat_model(explicit_caching=True)      # agent.py:800
 |-----------|----------------------|----------|------|
 | **Anthropic API** | `"anthropic"` | ✅ **자동** | LiteLLM이 `cache_control`을 Anthropic 형식으로 변환 |
 | OpenAI API | `"openai"` | ❌ | OpenAI는 자체 automatic caching 사용 (별도 마커 불필요) |
-| CLIProxy | `"other"` | ❌ | OpenAI 호환으로 라우팅되어 `cache_control` 무시 |
+| 기타 OpenAI 호환 | `"other"` | ❌ | OpenAI 호환으로 라우팅되어 `cache_control` 무시 |
 | Google Vertex | `"google"` | ❌ | Gemini는 context caching API가 다름 |
 
 **결론: Anthropic API를 사용해야만 Agent Zero의 내장 캐싱 로직이 활성화됩니다.**
@@ -154,11 +154,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
 }
 ```
 
-### Step 3: CLIProxy 제거 (선택)
-
-`docker-compose.yml`에서 cliproxy 서비스를 주석 처리하거나 제거합니다.
-
-### Step 4: 재시작
+### Step 3: 재시작
 
 ```bash
 docker compose up -d --build
@@ -220,7 +216,7 @@ Anthropic API 응답의 `usage` 필드에 캐싱 정보가 포함됩니다:
 
 ### 시나리오: 하루 200회 호출, 시스템 프롬프트 15,000 토큰
 
-**캐싱 없이 (CLIProxy 사용 시 → API 전환 가정):**
+**캐싱 없이 (non-Anthropic 프로바이더):**
 
 ```
 입력: 200회 × 15,000 토큰 = 3,000,000 토큰
@@ -373,7 +369,7 @@ class DisableCaching(Extension):
 
 - [ ] `settings.json`의 `chat_model_provider`가 `"anthropic"`인가?
 - [ ] `.env`에 `ANTHROPIC_API_KEY`가 설정되어 있는가?
-- [ ] `chat_model_api_base`가 비어있는가? (값이 있으면 CLIProxy 등 다른 곳으로 라우팅)
+- [ ] `chat_model_api_base`가 비어있는가? (값이 있으면 다른 엔드포인트로 라우팅)
 - [ ] API 응답에 `cache_read_input_tokens` 필드가 있는가?
 - [ ] 시스템 프롬프트가 1,024 토큰 이상인가? (미만이면 캐시 생성 안 됨)
 - [ ] 5분 이상 호출이 없었는가? (ephemeral TTL 만료)

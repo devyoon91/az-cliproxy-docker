@@ -276,7 +276,7 @@ curl http://telegram-bridge:8443/usage
 - LiteLLM의 [model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)에서 **봇 시작 시 최신 가격표를 자동 다운로드**
 - 2,600+ 모델의 공식 가격 반영
 - 다운로드 실패 시 기본값 ($2/$8 per 1M tokens) fallback
-- 구독형(CLIProxy) 사용 시 실제 과금이 아닌 **참고용 추정치**
+- 공식 청구서가 아닌 가격표 기반 **참고용 추정치**
 
 ---
 
