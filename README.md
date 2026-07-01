@@ -19,7 +19,7 @@ API 에 직접 연결하는 경로, **Track B (CLIProxy)** 는 공식 CLI 의 OA
 
 | Component | Version | Image / Detail |
 |-----------|---------|----------------|
-| Agent Zero | v2.0 | `agent0ai/agent-zero:v2.0` |
+| Agent Zero | v2.1 | `agent0ai/agent-zero:v2.1` |
 | CLIProxy | v6.9.18 | `eceasy/cli-proxy-api:v6.9.18` |
 | Telegram Bridge | custom | `python:3.12-slim` 기반 |
 | LiteLLM | 1.88.1 | Agent Zero 내장 |
